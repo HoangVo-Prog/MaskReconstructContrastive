@@ -13,7 +13,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from alzheimer_unet_data import create_unet_dataloaders
+# Dataset module expected to be present in the same environment
+# The user uploaded this earlier.
+try:
+    from alzheimer_unet_data import create_unet_dataloaders
+except Exception as e:
+    raise ImportError("Could not import create_unet_dataloaders from alzheimer_unet_data.py. "
+                      "Please ensure the file is available and the function signature matches.") from e
 
 # Optional: for t-SNE and plotting
 from sklearn.manifold import TSNE
@@ -160,11 +166,7 @@ class SmallUNetSSL(nn.Module):
         return recon, b
 
     def embed(self, x):
-        # Return normalized projection for contrastive
-        with torch.no_grad():
-            self.eval()
-        # But we still allow gradients through embed in training step
-        # by not using torch.no_grad in training loop
+        # Return normalized projection for contrastive (keeps grad; uses current train/eval mode)
         s1, s2, s3, s4, b = self.encode_feats(x)
         pooled = self.gap(b).flatten(1)
         h = self.embed_fc(pooled)
@@ -296,17 +298,22 @@ def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, pixel_mask: torch.T
 
 def nt_xent_loss(z1: torch.Tensor, z2: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
     # z1, z2: [B, D], normalized
-    B, D = z1.size()
+    B, _ = z1.size()
     z = torch.cat([z1, z2], dim=0)  # [2B, D]
     sim = torch.matmul(z, z.t()) / temperature  # cosine sim since normalized
-    # mask self-similarity
-    diag = torch.eye(2 * B, device=z.device, dtype=torch.bool)
-    sim = sim.masked_fill(diag, -9e15)
+
+    # Do the softmax & CE in float32 for numerical stability even under AMP
+    sim = sim.to(torch.float32)
+
+    # Mask self-similarity with a dtype-safe fill value
+    diag = torch.eye(2 * B, device=sim.device, dtype=torch.bool)
+    fill_value = -float('inf')  # works for all IEEE dtypes
+    sim = sim.masked_fill(diag, fill_value)
 
     # positives are (i, i+B) and (i+B, i)
-    pos = torch.cat([torch.arange(B, 2 * B), torch.arange(0, B)]).to(z.device)
-    # For each row i, the positive index is pos[i]
-    labels = pos
+    pos = torch.cat([torch.arange(B, 2 * B, device=sim.device),
+                     torch.arange(0, B, device=sim.device)], dim=0)
+    labels = pos  # [2B]
     loss = F.cross_entropy(sim, labels)
     return loss
 
@@ -377,7 +384,7 @@ def train(args):
 
     # Optimizer and scheduler
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda" and args.amp))
+    scaler = torch.amp.GradScaler(enabled=(device.type == "cuda" and args.amp))
 
     # Augmentations for halves
     halfer = HalfAug(p_noise=0.7, p_jitter=0.7, p_blur=0.2, noise_std=0.02, jitter_strength=0.1, blur_kernel=3)
@@ -402,7 +409,7 @@ def train(args):
 
         for step, batch in enumerate(train_loader, start=1):
             x = batch["input"].to(device, non_blocking=True)  # Bx1xH xW
-            with torch.cuda.amp.autocast(enabled=(device.type == "cuda" and args.amp)):
+            with torch.amp.autocast(enabled=(device.type == "cuda" and args.amp)):
                 # Masks per batch
                 pixel_mask = sample_masks_anti_mirror(x.size(0), spec, device)  # Bx1xHxW
 
