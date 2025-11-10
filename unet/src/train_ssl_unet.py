@@ -409,7 +409,7 @@ def train(args):
 
         for step, batch in enumerate(train_loader, start=1):
             x = batch["input"].to(device, non_blocking=True)  # Bx1xH xW
-            with torch.amp.autocast(enabled=(device.type == "cuda" and args.amp)):
+            with torch.amp.autocast(enabled=(device.type == "cuda" and args.amp), device_type=device.type):
                 # Masks per batch
                 pixel_mask = sample_masks_anti_mirror(x.size(0), spec, device)  # Bx1xHxW
 
