@@ -117,6 +117,7 @@ def create_unet_dataloaders(
     num_workers: int = 2,
     image_size: int = 128,
     apply_unsharp: bool = True,
+    pin_memory: bool = True,
 ):
     """
     Tạo DataLoader cho UNet với dataset Falah/Alzheimer_MRI.
@@ -161,19 +162,19 @@ def create_unet_dataloaders(
         apply_unsharp=apply_unsharp,
     )
 
-    def make_loader(ds, shuffle: bool, drop_last: bool = False):
+    def make_loader(ds, shuffle: bool, drop_last: bool = False, pin_memory=False):
         return DataLoader(
             ds,
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=False,
+            pin_memory=pin_memory,
             drop_last=drop_last,
         )
 
-    train_loader = make_loader(train_ds, shuffle=True, drop_last=True)
-    val_loader = make_loader(val_ds, shuffle=False, drop_last=False)
-    test_loader = make_loader(test_ds, shuffle=False, drop_last=False)
+    train_loader = make_loader(train_ds, shuffle=True, drop_last=True, pin_memory=pin_memory)
+    val_loader = make_loader(val_ds, shuffle=False, drop_last=False, pin_memory=pin_memory)
+    test_loader = make_loader(test_ds, shuffle=False, drop_last=False, pin_memory=pin_memory)
 
     return train_loader, val_loader, test_loader
 
