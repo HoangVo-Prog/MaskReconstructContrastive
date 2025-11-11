@@ -128,13 +128,31 @@ class SmallUNetSSL(nn.Module):
             in_embed = base_ch * 4 + base_ch * 8 + base_ch * 8  # s3 + s4 + bottleneck
         else:
             in_embed = base_ch * 8
-        self.embed_fc = nn.Linear(in_embed, bottleneck_dim)
+        self.use_multiscale = use_multiscale
+        self.gem = GeM(p=3.0, learnable=False)
+
+        ch_s3 = base_ch * 4
+        ch_s4 = base_ch * 8
+        ch_b  = base_ch * 8
+        ch_ms = ch_s3 + ch_s4 + ch_b
+
+        self.embed_fc = nn.ModuleDict({
+            "s3":         nn.Linear(ch_s3, bottleneck_dim),
+            "s4":         nn.Linear(ch_s4, bottleneck_dim),
+            "bottleneck": nn.Linear(ch_b,  bottleneck_dim),
+            "multiscale": nn.Linear(ch_ms,  bottleneck_dim),
+        })
+        self.available_modes = ["s4", "bottleneck"]
+        if self.use_multiscale:
+            self.available_modes.append("multiscale")
+
         self.proj = nn.Sequential(
             nn.Linear(bottleneck_dim, bottleneck_dim, bias=False),
             nn.BatchNorm1d(bottleneck_dim),
             nn.ReLU(inplace=True),
             nn.Linear(bottleneck_dim, proj_dim, bias=True),
         )
+
 
     def encode_feats(self, x: torch.Tensor):
         s1 = self.enc1(x); p1 = self.pool1(s1)
@@ -159,20 +177,25 @@ class SmallUNetSSL(nn.Module):
         recon = torch.sigmoid(self.out_conv(x))
         return recon, (s3, s4, b)
 
-    def encoder_embed(self, x: torch.Tensor, mode: str = "multiscale"):
+    def encoder_embed(self, x, mode: str = "multiscale"):
         s1, s2, s3, s4, b = self.encode_feats(x)
-        if mode == "s4":
-            pooled = self.gem(s4).flatten(1)
+
+        if mode == "s3":
+            pooled = self.gem(s3).flatten(1); head = "s3"
+        elif mode == "s4":
+            pooled = self.gem(s4).flatten(1); head = "s4"
         elif mode == "bottleneck":
-            pooled = self.gem(b).flatten(1)
-        elif mode == "s3":
-            pooled = self.gem(s3).flatten(1)
-        else:
-            p3 = self.gem(s3).flatten(1)
-            p4 = self.gem(s4).flatten(1)
-            pb = self.gem(b).flatten(1)
-            pooled = torch.cat([p3, p4, pb], dim=1)
-        h = self.embed_fc(pooled)
+            pooled = self.gem(b).flatten(1);  head = "bottleneck"
+        else:  # "multiscale"
+            if self.use_multiscale:
+                pooled = torch.cat([self.gem(s3).flatten(1),
+                                    self.gem(s4).flatten(1),
+                                    self.gem(b).flatten(1)], dim=1)
+                head = "multiscale"
+            else:
+                pooled = self.gem(b).flatten(1); head = "bottleneck"
+
+        h = self.embed_fc[head](pooled)
         z = self.proj(h)
         z = F.normalize(z, dim=-1)
         return z, h
