@@ -13,13 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-# Dataset module expected to be present in the same environment
-# The user uploaded this earlier.
-try:
-    from alzheimer_unet_data import create_unet_dataloaders
-except Exception as e:
-    raise ImportError("Could not import create_unet_dataloaders from alzheimer_unet_data.py. "
-                      "Please ensure the file is available and the function signature matches.") from e
+
+from alzheimer_unet_data import create_unet_dataloaders
 
 # Optional: for t-SNE and plotting
 from sklearn.manifold import TSNE
