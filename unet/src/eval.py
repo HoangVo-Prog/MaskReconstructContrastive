@@ -190,8 +190,10 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
         count = 0
         for batch in loader:
             x = batch["input"].to(device, non_blocking=True)
-            x = x  # no extra aug here
-            _, h = model.encoder_embed(x, mode=mode)
+            _mode = mode
+            if mode == "multiscale" and not getattr(model, "use_multiscale", False):
+                _mode = "bottleneck"
+            _, h = model.encoder_embed(x, mode=_mode)
             embs.append(F.normalize(h, dim=-1).cpu().numpy())
             labels.append(batch.get("label", torch.zeros(x.size(0), dtype=torch.long, device=device)).cpu().numpy())
             count += x.size(0)
@@ -201,7 +203,11 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
             return None, None
         return np.concatenate(embs, axis=0), np.concatenate(labels, axis=0)
 
-    for mode in ["s4", "bottleneck", "multiscale"]:
+    modes = ["s4", "bottleneck"]
+    if getattr(model, "use_multiscale", False):
+        modes.append("multiscale")
+    
+    for mode in modes:
         X, y = collect(mode)
         if X is None:
             continue
