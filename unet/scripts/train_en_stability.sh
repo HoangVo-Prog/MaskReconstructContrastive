@@ -1,5 +1,7 @@
 #!/bin/bash
 # GroupNorm + SE for high-level stability
-python unet/src/train.py --amp \
+VER=$1
+
+python unet/src/"$VER"/train.py --amp \
   --use-gn --use-se \
   --pre-bias --pre-norm --pre-crop --pre-align

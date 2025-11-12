@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from alzheimer_unet_data import create_unet_dataloaders
 from model import SmallUNetSSL
-from eval import evaluate_recon, run_tsne_variants
+from unet.src.v1.eval import evaluate_recon, run_tsne_variants
 
 
 # Repro

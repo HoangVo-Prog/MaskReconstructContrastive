@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import argparse
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, List, Optional
 
 import numpy as np
 import torch
@@ -22,8 +22,23 @@ import matplotlib.pyplot as plt
 from model import SmallUNetSSL
 from alzheimer_unet_data import create_unet_dataloaders, create_unet_dataloader_from_folder_csv
 
+# Huggingface mapping and fixed colors for t SNE legends
+idx_map_label = {
+    '0': "Mild_Demented",
+    '1': "Moderate_Demented",
+    '2': "Non_Demented",
+    '3': "Very_Mild_Demented",
+}
 
-# Masking and preprocessing (local copy so eval can run standalone)
+dementia_colors = {
+    "Moderate_Demented": "#a5352b",
+    "Non_Demented": "#457eb7",
+    "Mild_Demented": "#e18775",
+    "Very_Mild_Demented": "#fcf9f7",
+}
+
+
+# Minimal preprocessing and masking so eval can run standalone
 
 @dataclass
 class MaskSpec:
@@ -58,86 +73,90 @@ def sample_masks_anti_mirror(batch_size: int, spec: MaskSpec, device: torch.devi
     return mask
 
 
+def otsu_threshold(x: torch.Tensor, bins: int = 256) -> torch.Tensor:
+    B = x.size(0)
+    thresholds = []
+    for b in range(B):
+        hist = torch.histc(x[b].flatten(), bins=bins, min=0.0, max=1.0)
+        p = hist / hist.sum().clamp(min=1.0)
+        omega = torch.cumsum(p, 0)
+        mu = torch.cumsum(p * torch.arange(bins, device=x.device), 0)
+        mu_t = mu[-1]
+        sigma_b2 = (mu_t * omega - mu) ** 2 / (omega * (1 - omega)).clamp(min=1e-8)
+        sigma_b2[torch.isnan(sigma_b2)] = -1
+        t = torch.argmax(sigma_b2).item()
+        thresholds.append((t + 0.5) / bins)
+    return torch.tensor(thresholds, device=x.device, dtype=x.dtype).view(B, 1, 1, 1)
+
+
+def brain_mask(x: torch.Tensor) -> torch.Tensor:
+    thr = otsu_threshold(x)
+    m = (x > thr).float()
+    m_blur = F.avg_pool2d(m, kernel_size=7, stride=1, padding=3)
+    m = (m_blur > 0.2).float()
+    return m
+
+
+def bias_field_lite(x: torch.Tensor, kernel: int = 31) -> torch.Tensor:
+    blur = F.avg_pool2d(x, kernel_size=kernel, stride=1, padding=kernel // 2)
+    blur = blur.clamp(min=1e-3)
+    x_corr = x / blur
+    x_corr = x_corr - x_corr.amin(dim=(2,3), keepdim=True)
+    x_corr = x_corr / x_corr.amax(dim=(2,3), keepdim=True).clamp(min=1e-6)
+    return x_corr
+
+
+def tight_crop_and_resize(x: torch.Tensor, mask: torch.Tensor, out_hw: int) -> torch.Tensor:
+    B, _, H, W = x.shape
+    out = []
+    for b in range(B):
+        ys, xs = torch.where(mask[b, 0] > 0.0)
+        if ys.numel() == 0:
+            out.append(F.interpolate(x[b:b+1], size=(out_hw, out_hw), mode="bilinear", align_corners=False))
+            continue
+        y1, y2 = ys.min().item(), ys.max().item()
+        x1, x2 = xs.min().item(), xs.max().item()
+        h = y2 - y1 + 1
+        w = x2 - x1 + 1
+        side = max(h, w)
+        cy = (y1 + y2) // 2
+        cx = (x1 + x2) // 2
+        y1s = max(0, cy - side // 2)
+        x1s = max(0, cx - side // 2)
+        y2s = min(H, y1s + side)
+        x2s = min(W, x1s + side)
+        crop = x[b:b+1, :, y1s:y2s, x1s:x2s]
+        out.append(F.interpolate(crop, size=(out_hw, out_hw), mode="bilinear", align_corners=False))
+    return torch.cat(out, dim=0)
+
+
+def align_midline(x: torch.Tensor, max_shift: int = 4) -> torch.Tensor:
+    B, C, H, W = x.shape
+    best = []
+    for b in range(B):
+        xb = x[b:b+1]
+        best_score = -1e9
+        best_img = xb
+        for d in range(-max_shift, max_shift + 1):
+            if d < 0:
+                pad = (0, -d, 0, 0)
+                xs = F.pad(xb, pad, mode="replicate")[..., :W]
+            elif d > 0:
+                pad = (d, 0, 0, 0)
+                xs = F.pad(xb, pad, mode="replicate")[..., -W:]
+            else:
+                xs = xb
+            left = xs[..., :W//2]
+            right = torch.flip(xs[..., W//2:], dims=[-1])
+            score = (left * right).mean()
+            if score > best_score:
+                best_score = score
+                best_img = xs
+        best.append(best_img)
+    return torch.cat(best, dim=0)
+
+
 def preprocess_batch(x: torch.Tensor, args) -> torch.Tensor:
-    # Minimal version for eval. Uses the same flags from stored ckpt args when available.
-    def otsu_threshold(x: torch.Tensor, bins: int = 256) -> torch.Tensor:
-        B = x.size(0)
-        thresholds = []
-        for b in range(B):
-            hist = torch.histc(x[b].flatten(), bins=bins, min=0.0, max=1.0)
-            p = hist / hist.sum().clamp(min=1.0)
-            omega = torch.cumsum(p, 0)
-            mu = torch.cumsum(p * torch.arange(bins, device=x.device), 0)
-            mu_t = mu[-1]
-            sigma_b2 = (mu_t * omega - mu) ** 2 / (omega * (1 - omega)).clamp(min=1e-8)
-            sigma_b2[torch.isnan(sigma_b2)] = -1
-            t = torch.argmax(sigma_b2).item()
-            thresholds.append((t + 0.5) / bins)
-        return torch.tensor(thresholds, device=x.device, dtype=x.dtype).view(B, 1, 1, 1)
-
-    def brain_mask(x: torch.Tensor) -> torch.Tensor:
-        thr = otsu_threshold(x)
-        m = (x > thr).float()
-        m_blur = F.avg_pool2d(m, kernel_size=7, stride=1, padding=3)
-        m = (m_blur > 0.2).float()
-        return m
-
-    def bias_field_lite(x: torch.Tensor, kernel: int = 31) -> torch.Tensor:
-        blur = F.avg_pool2d(x, kernel_size=kernel, stride=1, padding=kernel // 2)
-        blur = blur.clamp(min=1e-3)
-        x_corr = x / blur
-        x_corr = x_corr - x_corr.amin(dim=(2,3), keepdim=True)
-        x_corr = x_corr / x_corr.amax(dim=(2,3), keepdim=True).clamp(min=1e-6)
-        return x_corr
-
-    def tight_crop_and_resize(x: torch.Tensor, mask: torch.Tensor, out_hw: int) -> torch.Tensor:
-        B, _, H, W = x.shape
-        out = []
-        for b in range(B):
-            ys, xs = torch.where(mask[b, 0] > 0.0)
-            if ys.numel() == 0:
-                out.append(F.interpolate(x[b:b+1], size=(out_hw, out_hw), mode="bilinear", align_corners=False))
-                continue
-            y1, y2 = ys.min().item(), ys.max().item()
-            x1, x2 = xs.min().item(), xs.max().item()
-            h = y2 - y1 + 1
-            w = x2 - x1 + 1
-            side = max(h, w)
-            cy = (y1 + y2) // 2
-            cx = (x1 + x2) // 2
-            y1s = max(0, cy - side // 2)
-            x1s = max(0, cx - side // 2)
-            y2s = min(H, y1s + side)
-            x2s = min(W, x1s + side)
-            crop = x[b:b+1, :, y1s:y2s, x1s:x2s]
-            out.append(F.interpolate(crop, size=(out_hw, out_hw), mode="bilinear", align_corners=False))
-        return torch.cat(out, dim=0)
-
-    def align_midline(x: torch.Tensor, max_shift: int = 4) -> torch.Tensor:
-        B, C, H, W = x.shape
-        best = []
-        for b in range(B):
-            xb = x[b:b+1]
-            best_score = -1e9
-            best_img = xb
-            for d in range(-max_shift, max_shift + 1):
-                if d < 0:
-                    pad = (0, -d, 0, 0)
-                    xs = F.pad(xb, pad, mode="replicate")[..., :W]
-                elif d > 0:
-                    pad = (d, 0, 0, 0)
-                    xs = F.pad(xb, pad, mode="replicate")[..., -W:]
-                else:
-                    xs = xb
-                left = xs[..., :W//2]
-                right = torch.flip(xs[..., W//2:], dims=[-1])
-                score = (left * right).mean()
-                if score > best_score:
-                    best_score = score
-                    best_img = xs
-            best.append(best_img)
-        return torch.cat(best, dim=0)
-
     if getattr(args, "pre_bias", False):
         x = bias_field_lite(x, kernel=31)
     if getattr(args, "pre_norm", False) or getattr(args, "pre_crop", False):
@@ -185,15 +204,16 @@ def evaluate_recon(model: SmallUNetSSL, loader: DataLoader, device: torch.device
 def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.device, out_prefix: str, max_items: int = 1000):
     model.eval()
 
+    modes = ["s4", "bottleneck"]
+    if getattr(model, "use_multiscale", False):
+        modes.append("multiscale")
+
     def collect(mode: str):
         embs, labels = [], []
         count = 0
         for batch in loader:
             x = batch["input"].to(device, non_blocking=True)
-            _mode = mode
-            if mode == "multiscale" and not getattr(model, "use_multiscale", False):
-                _mode = "bottleneck"
-            _, h = model.encoder_embed(x, mode=_mode)
+            _, h = model.encoder_embed(x, mode=mode)
             embs.append(F.normalize(h, dim=-1).cpu().numpy())
             labels.append(batch.get("label", torch.zeros(x.size(0), dtype=torch.long, device=device)).cpu().numpy())
             count += x.size(0)
@@ -203,27 +223,30 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
             return None, None
         return np.concatenate(embs, axis=0), np.concatenate(labels, axis=0)
 
-    modes = ["s4", "bottleneck"]
-    if getattr(model, "use_multiscale", False):
-        modes.append("multiscale")
-    
     for mode in modes:
         X, y = collect(mode)
         if X is None:
             continue
         tsne = TSNE(n_components=2, perplexity=30, init="pca", learning_rate="auto", random_state=42)
         X2 = tsne.fit_transform(X)
-        os.makedirs(os.path.dirname(out_prefix), exist_ok=True)
+
         plt.figure(figsize=(6, 6))
-        scatter = plt.scatter(X2[:, 0], X2[:, 1], c=y, s=10, cmap="tab10", alpha=0.8)
-        plt.colorbar(scatter, label="label")
+        uniq = sorted(set(list(y)))
+        for lbl in uniq:
+            key = str(int(lbl)) if str(lbl).isdigit() else str(lbl)
+            name = idx_map_label.get(key, key)
+            color = dementia_colors.get(name, "#888888")
+            mask = (y == lbl)
+            plt.scatter(X2[mask, 0], X2[mask, 1], s=10, c=color, label=name, alpha=0.9)
+        plt.legend(loc="best", fontsize=8, frameon=False)
         plt.tight_layout()
         path = f"{out_prefix}_enc_{mode}.png"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         plt.savefig(path, dpi=150)
         plt.close()
 
 
-# CLI to eval a checkpoint
+# Optional CLI to eval a checkpoint or make t SNE from it
 
 def _load_from_ckpt(ckpt_path: str, device: torch.device) -> tuple[SmallUNetSSL, dict]:
     ckpt = torch.load(ckpt_path, map_location=device)
@@ -262,7 +285,6 @@ def main():
     model, cfg = _load_from_ckpt(args.ckpt, device)
 
     image_size = cfg.get("image_size", 192)
-    val_size = cfg.get("val_size", 0.2)
 
     val_loader = create_unet_dataloader_from_folder_csv(
         image_dir=args.image_dir,
