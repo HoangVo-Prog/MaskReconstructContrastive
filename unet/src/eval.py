@@ -266,6 +266,7 @@ def main():
 
     val_loader = create_unet_dataloader_from_folder(
         image_dir=args.image_dir,
+        csv_map=args.csv_map,
         image_size=image_size,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
