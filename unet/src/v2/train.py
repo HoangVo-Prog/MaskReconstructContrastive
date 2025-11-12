@@ -503,7 +503,6 @@ def train(args):
         save_image_grid([vx, vmask, vmasked, vrecon.clamp(0,1), vresid],
                         ['val: target', 'mask', 'masked', 'recon', 'residual'],
                         out_path)
-        print("Save vis at:", out_path)
 
         # Save checkpoint
         ckpt = {
