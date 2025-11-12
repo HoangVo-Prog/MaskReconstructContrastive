@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from model import SmallUNetSSL
-from alzheimer_unet_data import create_unet_dataloaders, create_unet_dataloader_from_folder
+from alzheimer_unet_data import create_unet_dataloaders, create_unet_dataloader_from_folder_csv
 
 
 # Masking and preprocessing (local copy so eval can run standalone)
@@ -264,7 +264,7 @@ def main():
     image_size = cfg.get("image_size", 192)
     val_size = cfg.get("val_size", 0.2)
 
-    val_loader = create_unet_dataloader_from_folder(
+    val_loader = create_unet_dataloader_from_folder_csv(
         image_dir=args.image_dir,
         csv_map=args.csv_map,
         image_size=image_size,
