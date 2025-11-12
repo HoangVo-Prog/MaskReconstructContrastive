@@ -384,11 +384,17 @@ def train(args):
 
     csv_path = str((logs_dir / "train_log.csv"))
     with open(csv_path, "w") as f:
-        f.write("epoch,step,loss_total,loss_recon,loss_contrast,emb_var_mean,emb_var_min")
+        f.write("epoch,step,loss_total,loss_recon,loss_contrast,emb_var_mean,emb_var_min\n")
 
     best_val = float("inf")
 
     for epoch in range(1, args.epochs + 1):
+        
+        train_l1_num = 0.0
+        train_l1_den = 0.0
+        train_ssim_sum = 0.0
+        train_img_count = 0
+        
         model.train()
         t0 = time.time()
         losses_recon, losses_con, emb_vars = [], [], []
@@ -406,20 +412,27 @@ def train(args):
 
                 recon, _ = model.forward(x, pixel_mask=pixel_mask)
                 loss_recon = masked_l1_loss(recon, x, pixel_mask)
-                ssim_batch = ssim_index(x, recon).mean()
+                
+            with torch.amp.autocast("cuda", enabled=False):
+                ssim_sum = ssim_index(x.float(), recon.float()).sum()
 
-                B, C, H, W = x.size()
-                mid = W // 2
-                left = x[..., :mid]
-                right = x[..., mid:]
-                left_aug = halfer(left.clone())
-                right_aug = halfer(right.clone())
+            train_l1_num += torch.abs(recon - x).mul(pixel_mask).sum().item()   # numerator over all masked pixels
+            train_l1_den += pixel_mask.sum().item()                              # total masked pixels
+            train_ssim_sum += float(ssim_sum.item())                             # sum over images
+            train_img_count += x.size(0)
 
-                zL, _ = model.encoder_embed(left_aug, mode="multiscale" if args.use_multiscale else "bottleneck")
-                zR, _ = model.encoder_embed(right_aug, mode="multiscale" if args.use_multiscale else "bottleneck")
-                loss_con = nt_xent_loss(zL, zR, temperature=args.temperature)
+            B, C, H, W = x.size()
+            mid = W // 2
+            left = x[..., :mid]
+            right = x[..., mid:]
+            left_aug = halfer(left.clone())
+            right_aug = halfer(right.clone())
 
-                loss = args.lambda_recon * loss_recon + args.lambda_contrast * loss_con
+            zL, _ = model.encoder_embed(left_aug, mode="multiscale" if args.use_multiscale else "bottleneck")
+            zR, _ = model.encoder_embed(right_aug, mode="multiscale" if args.use_multiscale else "bottleneck")
+            loss_con = nt_xent_loss(zL, zR, temperature=args.temperature)
+
+            loss = args.lambda_recon * loss_recon + args.lambda_contrast * loss_con
 
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
@@ -433,7 +446,7 @@ def train(args):
             losses_con.append(loss_con.item())
             emb_vars.append(mean_var)
             ep_train_recon.append(loss_recon.item())
-            ep_train_ssim.append(float(ssim_batch))
+            ep_train_ssim.append(float(ssim_sum))
 
             if step % args.vis_every == 0:
                 masked_input = x * (1.0 - pixel_mask)
@@ -453,17 +466,30 @@ def train(args):
         val_recon = evaluate_recon(model, val_loader, device, spec, args)
 
         model.eval()
+        val_l1_num = 0.0
+        val_l1_den = 0.0
+        val_ssim_sum = 0.0
+        val_img_count = 0
         with torch.no_grad():
             for vb in val_loader:
                 vx = vb['input'].to(device, non_blocking=True)
                 vx = preprocess_batch(vx, args)
                 vmask = sample_masks_anti_mirror(vx.size(0), spec, device)
                 vrecon, _ = model.forward(vx, pixel_mask=vmask)
-                ep_val_recon.append(float(masked_l1_loss(vrecon, vx, vmask).item()))
-                ep_val_ssim.append(float(ssim_index(vx, vrecon).mean().item()))
 
-        print(f"Epoch {epoch:03d} | val recon {val_recon:.4f} | train SSIM {np.mean(ep_train_ssim):.4f} | val SSIM {np.mean(ep_val_ssim):.4f}")
+                val_l1_num += torch.abs(vrecon - vx).mul(vmask).sum().item()
+                val_l1_den += vmask.sum().item()
+                with torch.amp.autocast("cuda", enabled=False):
+                    val_ssim_sum += float(ssim_index(vx.float(), vrecon.float()).sum().item())
+                val_img_count += vx.size(0)
 
+        train_l1_mean = (train_l1_num / max(train_l1_den, 1.0))
+        val_l1_mean   = (val_l1_num   / max(val_l1_den, 1.0))
+        train_ssim_mean = (train_ssim_sum / max(train_img_count, 1))
+        val_ssim_mean   = (val_ssim_sum   / max(val_img_count, 1))
+
+        print(f"Epoch {epoch:03d} | train recon {train_l1_mean:.4f} | val recon {val_l1_mean:.4f} | "
+            f"train SSIM {train_ssim_mean:.4f} | val SSIM {val_ssim_mean:.4f}")
         # Per epoch visualization from first val batch
         vb = next(iter(val_loader))
         vx = vb['input'].to(device, non_blocking=True)
@@ -492,7 +518,7 @@ def train(args):
         # Append epoch metrics
         with open(str(logs_dir / 'epoch_log.csv'), 'a' if epoch > 1 else 'w') as ef:
             if epoch == 1:
-                ef.write('epoch,train_recon,train_ssim,val_recon,val_ssim')
+                ef.write('epoch,train_recon,train_ssim,val_recon,val_ssim\n')
             ef.write(f"{epoch},{np.mean(ep_train_recon):.6f},{np.mean(ep_train_ssim):.6f},{np.mean(ep_val_recon):.6f},{np.mean(ep_val_ssim):.6f}")
 
         # t SNE snapshots
