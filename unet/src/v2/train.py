@@ -498,10 +498,12 @@ def train(args):
         vrecon, _ = model.forward(vx, pixel_mask=vmask)
         vresid = torch.abs(vx - vrecon).clamp(0, 1)
         vmasked = vx * (1.0 - vmask)
+
+        out_path = str(vis_dir / f'epoch_{epoch:03d}.png')
         save_image_grid([vx, vmask, vmasked, vrecon.clamp(0,1), vresid],
                         ['val: target', 'mask', 'masked', 'recon', 'residual'],
-                        str((vis_dir / f'epoch_{epoch:03d}.png')))
-        print("Save vis at:", str((vis_dir / f'epoch_{epoch:03d}.png')))
+                        out_path)
+        print("Save vis at:", out_path)
 
         # Save checkpoint
         ckpt = {
@@ -520,8 +522,7 @@ def train(args):
         with open(str(logs_dir / 'epoch_log.csv'), 'a' if epoch > 1 else 'w') as ef:
             if epoch == 1:
                 ef.write('epoch,train_recon,train_ssim,val_recon,val_ssim\n')
-            ef.write(f"{epoch},{np.mean(ep_train_recon):.6f},{np.mean(ep_train_ssim):.6f},{np.mean(ep_val_recon):.6f},{np.mean(ep_val_ssim):.6f}")
-
+            ef.write(f"{epoch},{train_l1_mean:.6f},{train_ssim_mean:.6f},{val_l1_mean:.6f},{val_ssim_mean:.6f}\n")
         # t SNE snapshots
         if epoch % args.tsne_every == 0:
             tsne_prefix = str(tsne_dir / f"tsne_epoch{epoch:03d}")
