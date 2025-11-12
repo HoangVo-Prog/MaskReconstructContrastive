@@ -20,7 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from model import SmallUNetSSL
-from alzheimer_unet_data import create_unet_dataloaders
+from alzheimer_unet_data import create_unet_dataloaders, create_unet_dataloader_from_folder
 
 
 # Masking and preprocessing (local copy so eval can run standalone)
@@ -244,6 +244,7 @@ def _load_from_ckpt(ckpt_path: str, device: torch.device) -> tuple[SmallUNetSSL,
 
 def build_argparser():
     p = argparse.ArgumentParser("Eval helpers for SSL UNet")
+    p.add_argument("--image-dir", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
     p.add_argument("--split", type=str, default="val", choices=["train", "val", "test"])
     p.add_argument("--batch-size", type=int, default=64)
@@ -254,7 +255,7 @@ def build_argparser():
     return p
 
 
-def main_eval():
+def main():
     args = build_argparser().parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, cfg = _load_from_ckpt(args.ckpt, device)
@@ -262,7 +263,8 @@ def main_eval():
     image_size = cfg.get("image_size", 192)
     val_size = cfg.get("val_size", 0.2)
 
-    train_loader, val_loader, test_loader = create_unet_dataloaders(
+    val_loader = create_unet_dataloader_from_folder(
+        image_dir=args.image_dir,
         image_size=image_size,
         batch_size=args.batch_size,
         val_size=val_size,
@@ -271,7 +273,7 @@ def main_eval():
         pin_memory=True,
     )
 
-    loader = {"train": train_loader, "val": val_loader, "test": test_loader}[args.split]
+    loader = {"train": None, "val": val_loader, "test": None}[args.split]
     spec = MaskSpec(patch_size=cfg.get("patch_size", 16), mask_ratio_side=cfg.get("mask_ratio", 0.35), image_size=image_size)
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -285,4 +287,4 @@ def main_eval():
 
 
 if __name__ == "__main__":
-    main_eval()
+    main()

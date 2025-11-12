@@ -8,6 +8,16 @@ from torchvision import transforms
 from sklearn.model_selection import train_test_split
 import numpy as np
 
+import os
+from pathlib import Path
+from typing import List, Tuple, Optional, Dict
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image, UnidentifiedImageError
+
 
 class UnsharpMask(nn.Module):
     """
@@ -179,8 +189,167 @@ def create_unet_dataloaders(
     return train_loader, val_loader, test_loader
 
 
+class FolderUNetDataset(Dataset):
+    """
+    Load images from a directory.
+
+    Folder structures supported:
+    1) Flat folder of images: image_dir/*.png|jpg|jpeg -> label = 0
+    2) Class subfolders: image_dir/class_x/*.png|jpg|jpeg -> label inferred from subfolder
+
+    Returns a dict:
+        {
+            "input":    processed tensor [1,H,W] (optionally unsharp),
+            "target":   same as "input" (reconstruction target),
+            "original": original tensor [1,H,W] before unsharp,
+            "label":    int64 tensor,
+            "path":     str path to file
+        }
+    """
+
+    IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+    def __init__(
+        self,
+        image_dir: str,
+        image_size: int = 128,
+        apply_unsharp: bool = True,
+        recursive: bool = True,
+        infer_labels: bool = True,
+    ):
+        self.image_dir = Path(image_dir)
+        self.image_size = image_size
+        self.apply_unsharp = apply_unsharp
+        self.infer_labels = infer_labels
+
+        if not self.image_dir.exists():
+            raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
+
+        # Gather files
+        pattern = "**/*" if recursive else "*"
+        all_paths = sorted(p for p in self.image_dir.glob(pattern) if p.suffix.lower() in self.IMG_EXTS)
+
+        # If infer_labels and subfolders exist, map labels from immediate subfolder names
+        self.class_to_idx: Dict[str, int] = {}
+        if infer_labels:
+            # collect classes that actually contain images
+            class_names = sorted({p.parent.name for p in all_paths if p.parent != self.image_dir})
+            if len(class_names) >= 2:
+                self.class_to_idx = {c: i for i, c in enumerate(class_names)}
+
+        # Build file list with labels
+        self.samples: List[Tuple[Path, int]] = []
+        for p in all_paths:
+            if self.class_to_idx:
+                cls = p.parent.name
+                label = self.class_to_idx.get(cls, 0)
+            else:
+                label = 0
+            self.samples.append((p, label))
+
+        if len(self.samples) == 0:
+            raise RuntimeError(f"No images found in {self.image_dir}")
+
+        # Base transform: resize, grayscale, to tensor
+        self.base_transform = transforms.Compose(
+            [
+                transforms.Resize((image_size, image_size)),
+                transforms.Grayscale(num_output_channels=1),
+                transforms.ToTensor(),
+            ]
+        )
+
+        self.unsharp = UnsharpMask(kernel_size=5, sigma=1.0, amount=0.7) if apply_unsharp else None
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def _load_image(self, path: Path) -> Image.Image:
+        # Robust open
+        with Image.open(path) as img:
+            return img.convert("RGB")
+
+    def __getitem__(self, idx: int):
+        path, label = self.samples[idx]
+        try:
+            pil_img = self._load_image(path)
+        except (UnidentifiedImageError, OSError) as e:
+            raise RuntimeError(f"Failed to open image: {path}") from e
+
+        x_orig = self.base_transform(pil_img)  # [1,H,W]
+
+        if self.unsharp is not None:
+            x_proc = self.unsharp(x_orig)       # [1,H,W]
+        else:
+            x_proc = x_orig
+
+        return {
+            "input": x_proc,
+            "target": x_proc,
+            "original": x_orig,
+            "label": torch.tensor(label, dtype=torch.long),
+            "path": str(path),
+        }
+
+
+# ========= Single DataLoader creator (no split) =========
+def create_unet_dataloader_from_folder(
+    image_dir: str,
+    batch_size: int = 8,
+    num_workers: int = 2,
+    image_size: int = 128,
+    apply_unsharp: bool = True,
+    pin_memory: bool = True,
+    shuffle: bool = True,
+    recursive: bool = True,
+    infer_labels: bool = True,
+):
+    """
+    Create one DataLoader for all images inside `image_dir`.
+
+    Args:
+        image_dir: folder path containing images, with or without class subfolders
+        batch_size: loader batch size
+        num_workers: DataLoader workers
+        image_size: resize to (image_size, image_size)
+        apply_unsharp: apply UnsharpMask to inputs/targets
+        pin_memory: pin memory for faster host-to-device copies
+        shuffle: shuffle file order
+        recursive: search subdirectories
+        infer_labels: infer labels from subfolder names if present
+
+    Returns:
+        torch.utils.data.DataLoader
+    """
+    dataset = FolderUNetDataset(
+        image_dir=image_dir,
+        image_size=image_size,
+        apply_unsharp=apply_unsharp,
+        recursive=recursive,
+        infer_labels=infer_labels,
+    )
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=False,
+    )
+
+    print(f"Loaded {len(dataset)} images from {image_dir}")
+    if dataset.class_to_idx:
+        print(f"Detected classes: {dataset.class_to_idx}")
+    else:
+        print("No class subfolders detected, labels set to 0")
+
+    return loader
+
+
 __all__ = [
     "UnsharpMask",
     "AlzheimerUNetDataset",
     "create_unet_dataloaders",
+    "create_unet_dataloader_from_folder",
 ]
