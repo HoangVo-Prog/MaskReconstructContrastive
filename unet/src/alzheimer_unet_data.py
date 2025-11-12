@@ -7,6 +7,7 @@ from datasets import load_dataset
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
 import numpy as np
+import pandas as pd
 
 import os
 from pathlib import Path
