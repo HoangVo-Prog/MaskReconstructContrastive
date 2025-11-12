@@ -37,7 +37,7 @@ dementia_colors = {
     "Moderate_Demented": "#a5352b",
     "Non_Demented": "#457eb7",
     "Mild_Demented": "#e18775",
-    "Very_Mild_Demented": "#fcf9f7",
+    "Very_Mild_Demented": "#ffe9c6",
 }
 
 
