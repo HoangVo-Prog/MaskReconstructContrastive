@@ -18,6 +18,17 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image, UnidentifiedImageError
 
+# Mindset mapping
+label_map_idx = {
+    'mtl_atrophy': 0,              # Mild_Demented
+    'mtl_atrophy,other_atrophy': 1,# Moderate_Demented
+    'mtl_atrophy,wmh': 3,          # Very_Mild_Demented
+    'normal': 2,                   # Non_Demented
+    'other_atrophy': 0,            # Mild_Demented
+    'wmh': 3,                      # Very_Mild_Demented
+    'wmh,other_atrophy': 1         # Moderate_Demented
+}
+
 
 class UnsharpMask(nn.Module):
     """
@@ -191,97 +202,118 @@ def create_unet_dataloaders(
 
 class FolderUNetDataset(Dataset):
     """
-    Load images from a directory.
+    Loads images using a CSV with columns:
+      - 'img_path': relative or absolute path to image file
+      - 'abnormal_type': mapped to label via `label_map_idx`
 
-    Folder structures supported:
-    1) Flat folder of images: image_dir/*.png|jpg|jpeg -> label = 0
-    2) Class subfolders: image_dir/class_x/*.png|jpg|jpeg -> label inferred from subfolder
-
-    Returns a dict:
-        {
-            "input":    processed tensor [1,H,W] (optionally unsharp),
-            "target":   same as "input" (reconstruction target),
-            "original": original tensor [1,H,W] before unsharp,
-            "label":    int64 tensor,
-            "path":     str path to file
-        }
+    Returns:
+      {
+        "input":    tensor [1,H,W] (optionally unsharp),
+        "target":   same as input,
+        "original": tensor [1,H,W] before unsharp,
+        "label":    int64 tensor,
+        "path":     str
+      }
     """
-
     IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
     def __init__(
         self,
         image_dir: str,
+        csv_map: str,
         image_size: int = 128,
         apply_unsharp: bool = True,
-        recursive: bool = True,
-        infer_labels: bool = True,
+        validate_images: bool = True,
+        warn_limit: int = 20,
     ):
         self.image_dir = Path(image_dir)
         self.image_size = image_size
         self.apply_unsharp = apply_unsharp
-        self.infer_labels = infer_labels
 
         if not self.image_dir.exists():
             raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
+        if csv_map is None or not Path(csv_map).exists():
+            raise FileNotFoundError(f"CSV mapping not found: {csv_map}")
 
-        # Gather files
-        pattern = "**/*" if recursive else "*"
-        all_paths = sorted(p for p in self.image_dir.glob(pattern) if p.suffix.lower() in self.IMG_EXTS)
+        # Read CSV and normalize fields
+        df = pd.read_csv(csv_map)
+        if "img_path" not in df.columns or "abnormal_type" not in df.columns:
+            raise ValueError("CSV must contain 'img_path' and 'abnormal_type' columns")
 
-        # If infer_labels and subfolders exist, map labels from immediate subfolder names
-        self.class_to_idx: Dict[str, int] = {}
-        if infer_labels:
-            # collect classes that actually contain images
-            class_names = sorted({p.parent.name for p in all_paths if p.parent != self.image_dir})
-            if len(class_names) >= 2:
-                self.class_to_idx = {c: i for i, c in enumerate(class_names)}
+        df["img_path"] = df["img_path"].astype(str).str.strip()
+        df["abnormal_type"] = df["abnormal_type"].astype(str).str.strip().str.lower()
 
-        # Build file list with labels
-        self.samples: List[Tuple[Path, int]] = []
-        for p in all_paths:
-            if self.class_to_idx:
-                cls = p.parent.name
-                label = self.class_to_idx.get(cls, 0)
-            else:
-                label = 0
-            self.samples.append((p, label))
+        # Map abnormal_type -> label
+        def map_label(a: str) -> Optional[int]:
+            return label_map_idx.get(a, None)
+        df["label"] = df["abnormal_type"].map(map_label)
 
-        if len(self.samples) == 0:
-            raise RuntimeError(f"No images found in {self.image_dir}")
+        # Report and drop rows with unknown mapping
+        unknown = df[df["label"].isna()]
+        if len(unknown) > 0:
+            print(f"[FolderUNetDataset] Warning: {len(unknown)} rows have unknown abnormal_type "
+                  f"and will be skipped. Examples: {unknown['abnormal_type'].unique()[:10]}")
+            df = df.dropna(subset=["label"])
 
-        # Base transform: resize, grayscale, to tensor
-        self.base_transform = transforms.Compose(
-            [
-                transforms.Resize((image_size, image_size)),
-                transforms.Grayscale(num_output_channels=1),
-                transforms.ToTensor(),
-            ]
-        )
+        # Build absolute paths
+        def make_full_path(p: str) -> Path:
+            p = p.strip()
+            # If already absolute, keep; else join with image_dir
+            return Path(p) if os.path.isabs(p) else (self.image_dir / p)
 
+        df["full_path"] = df["img_path"].apply(make_full_path)
+
+        # Optional pre-validation: existence + PIL-openable
+        samples: List[Tuple[Path, int]] = []
+        bad_count = 0
+        for _, row in df.iterrows():
+            path: Path = row["full_path"]
+            label = int(row["label"])
+            if not path.exists():
+                if bad_count < warn_limit:
+                    print(f"[FolderUNetDataset] Missing file: {path}")
+                bad_count += 1
+                continue
+            if validate_images:
+                try:
+                    with Image.open(path) as im:
+                        im.verify()  # quick header check
+                except Exception as e:
+                    if bad_count < warn_limit:
+                        print(f"[FolderUNetDataset] Unreadable image skipped: {path} ({type(e).__name__})")
+                    bad_count += 1
+                    continue
+            samples.append((path, label))
+
+        if bad_count > warn_limit:
+            print(f"[FolderUNetDataset] ...and {bad_count - warn_limit} more invalid/missing files skipped.")
+        if len(samples) == 0:
+            raise RuntimeError("No valid images after CSV mapping and validation.")
+
+        self.samples = samples
+
+        # Transforms
+        self.base_transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.Grayscale(num_output_channels=1),
+            transforms.ToTensor(),
+        ])
         self.unsharp = UnsharpMask(kernel_size=5, sigma=1.0, amount=0.7) if apply_unsharp else None
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def _load_image(self, path: Path) -> Image.Image:
-        # Robust open
-        with Image.open(path) as img:
-            return img.convert("RGB")
-
     def __getitem__(self, idx: int):
         path, label = self.samples[idx]
         try:
-            pil_img = self._load_image(path)
+            with Image.open(path) as img:
+                pil_img = img.convert("RGB")
         except (UnidentifiedImageError, OSError) as e:
+            # If validation was off, we might still hit a bad image at runtime
             raise RuntimeError(f"Failed to open image: {path}") from e
 
         x_orig = self.base_transform(pil_img)  # [1,H,W]
-
-        if self.unsharp is not None:
-            x_proc = self.unsharp(x_orig)       # [1,H,W]
-        else:
-            x_proc = x_orig
+        x_proc = self.unsharp(x_orig) if self.unsharp is not None else x_orig
 
         return {
             "input": x_proc,
@@ -291,43 +323,41 @@ class FolderUNetDataset(Dataset):
             "path": str(path),
         }
 
-
-# ========= Single DataLoader creator (no split) =========
-def create_unet_dataloader_from_folder(
+# -------------------------
+# Single DataLoader
+# -------------------------
+def create_unet_dataloader_from_folder_csv(
     image_dir: str,
+    csv_map: str,
     batch_size: int = 8,
     num_workers: int = 2,
     image_size: int = 128,
     apply_unsharp: bool = True,
     pin_memory: bool = True,
     shuffle: bool = True,
-    recursive: bool = True,
-    infer_labels: bool = True,
+    validate_images: bool = True,
 ):
     """
-    Create one DataLoader for all images inside `image_dir`.
+    Build a single DataLoader using a CSV mapping.
 
     Args:
-        image_dir: folder path containing images, with or without class subfolders
-        batch_size: loader batch size
-        num_workers: DataLoader workers
-        image_size: resize to (image_size, image_size)
-        apply_unsharp: apply UnsharpMask to inputs/targets
-        pin_memory: pin memory for faster host-to-device copies
-        shuffle: shuffle file order
-        recursive: search subdirectories
-        infer_labels: infer labels from subfolder names if present
+        image_dir: root folder for images
+        csv_map: path to CSV with columns ['img_path','abnormal_type']
+        batch_size, num_workers, image_size, apply_unsharp, pin_memory, shuffle:
+            same semantics as before
+        validate_images: if True, verify files are readable at init and skip bad ones
 
     Returns:
-        torch.utils.data.DataLoader
+        DataLoader over dict samples
     """
     dataset = FolderUNetDataset(
         image_dir=image_dir,
+        csv_map=csv_map,
         image_size=image_size,
         apply_unsharp=apply_unsharp,
-        recursive=recursive,
-        infer_labels=infer_labels,
+        validate_images=validate_images,
     )
+    print(f"Loaded {len(dataset)} valid images from CSV '{csv_map}' under '{image_dir}'")
 
     loader = DataLoader(
         dataset,
@@ -337,13 +367,6 @@ def create_unet_dataloader_from_folder(
         pin_memory=pin_memory,
         drop_last=False,
     )
-
-    print(f"Loaded {len(dataset)} images from {image_dir}")
-    if dataset.class_to_idx:
-        print(f"Detected classes: {dataset.class_to_idx}")
-    else:
-        print("No class subfolders detected, labels set to 0")
-
     return loader
 
 

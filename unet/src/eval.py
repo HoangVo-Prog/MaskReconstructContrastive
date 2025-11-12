@@ -246,6 +246,7 @@ def build_argparser():
     p = argparse.ArgumentParser("Eval helpers for SSL UNet")
     p.add_argument("--image-dir", type=str, required=True)
     p.add_argument("--ckpt", type=str, required=True)
+    p.add_argument("--csv-map", type=str, required=True)
     p.add_argument("--split", type=str, default="val", choices=["train", "val", "test"])
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--num-workers", type=int, default=4)
