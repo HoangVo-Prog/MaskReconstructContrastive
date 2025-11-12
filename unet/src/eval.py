@@ -267,7 +267,6 @@ def main():
         image_dir=args.image_dir,
         image_size=image_size,
         batch_size=args.batch_size,
-        val_size=val_size,
         num_workers=args.num_workers,
         apply_unsharp=True,
         pin_memory=True,
