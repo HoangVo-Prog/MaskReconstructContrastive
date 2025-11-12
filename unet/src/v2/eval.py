@@ -20,6 +20,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from model import SmallUNetSSL
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from alzheimer_unet_data import create_unet_dataloaders, create_unet_dataloader_from_folder_csv
 
 # Huggingface mapping and fixed colors for t SNE legends

@@ -18,10 +18,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from alzheimer_unet_data import create_unet_dataloaders
 from model import SmallUNetSSL
-from unet.src.v1.eval import evaluate_recon, run_tsne_variants
+from eval import evaluate_recon, run_tsne_variants
 
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from alzheimer_unet_data import create_unet_dataloaders
 
 # Repro
 
