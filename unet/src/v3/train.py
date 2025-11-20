@@ -382,10 +382,6 @@ def train(args):
     halfer = HalfAug(p_noise=0.7, p_jitter=0.7, p_blur=0.2, noise_std=0.02, jitter_strength=0.1, blur_kernel=3)
     spec = MaskSpec(patch_size=args.patch_size, mask_ratio_side=args.mask_ratio, image_size=args.image_size)
 
-    csv_path = str((logs_dir / "train_log.csv"))
-    with open(csv_path, "w") as f:
-        f.write("epoch,step,loss_total,loss_recon,loss_contrast,emb_var_mean,emb_var_min\n")
-
     best_val = float("inf")
 
     for epoch in range(1, args.epochs + 1):
@@ -403,13 +399,6 @@ def train(args):
 
         
         model.train()
-        t0 = time.time()
-        losses_recon, losses_con, emb_vars = [], [], []
-
-        # Epoch accumulators
-        ep_train_recon, ep_train_ssim = [], []
-        ep_val_recon, ep_val_ssim = [], []
-
         for step, batch in enumerate(train_loader, start=1):
             x = batch["input"].to(device, non_blocking=True)
             x = preprocess_batch(x, args)
@@ -466,29 +455,12 @@ def train(args):
             scaler.step(opt)
             scaler.update()
 
-            
-            losses_recon.append(loss_recon.item())
-            losses_con.append(loss_con.item())
-            emb_vars.append(mean_var)
-            ep_train_recon.append(loss_recon.item())
-            ep_train_ssim.append(float(ssim_sum))
-
             if step % args.vis_every == 0:
                 masked_input = x * (1.0 - pixel_mask)
                 out_path = str(vis_dir / f"train_epoch{epoch:03d}_step{step:05d}.png")
                 save_image_grid([x, pixel_mask, masked_input, recon.clamp(0, 1), torch.abs(x - recon).clamp(0, 1)],
                                 ["orig", "mask", "masked input", "recon", "residual"],
                                 out_path)
-
-            with open(csv_path, "a") as f:
-                f.write(
-                    f"{epoch},{step},{loss.item():.6f},{loss_recon.item():.6f},{loss_con.item():.6f},"
-                    f"{mean_var:.6f},{min_var:.6f}\n"
-                )
-
-        print(f"Epoch {epoch:03d} | train recon {np.mean(losses_recon):.4f} | train con {np.mean(losses_con):.4f} "
-              f"| emb var {np.mean(emb_vars):.5f} | lr {opt.param_groups[0]['lr']:.2e} | time {time.time() - t0:.1f}s")
-
         # Validation recon and SSIM
         val_recon = evaluate_recon(model, val_loader, device, spec, args)
 
@@ -620,10 +592,23 @@ def train(args):
         plt.xlabel('epoch'); plt.ylabel('L1 unmasked region')
         plt.legend(); plt.tight_layout()
         plt.savefig(str(plots_dir / 'recon_unmasked_curves.png'), dpi=150); plt.close()
+        
+        # SSIM curves
+        plt.figure(figsize=(6,4))
+        plt.plot(df['epoch'], df['train_ssim'], label='train_ssim')
+        plt.plot(df['epoch'], df['val_ssim'], label='val_ssim')
+        plt.xlabel('epoch'); plt.ylabel('SSIM')
+        plt.legend(); plt.tight_layout()
+        plt.savefig(str(plots_dir / 'ssim_curves.png'), dpi=150); plt.close()
 
 
 def build_argparser():
     p = argparse.ArgumentParser("Self supervised UNet (encoder centric) on 2D slices with MIM and InfoNCE")
+    
+    # data source
+    p.add_argument("--adni", default=False, help="whether to use ADNI dataset")
+    p.add_argument("--hf", default=True, help="whether to use Huggingface dataset")
+    
     # Size and data
     p.add_argument("--image-size", type=int, default=192)
     p.add_argument("--patch-size", type=int, default=16)

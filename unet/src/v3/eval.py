@@ -248,8 +248,6 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
         plt.savefig(path, dpi=150)
         plt.close()
         
-        # TODO: a tsne 
-
 
 # Optional CLI to eval a checkpoint or make t SNE from it
 
