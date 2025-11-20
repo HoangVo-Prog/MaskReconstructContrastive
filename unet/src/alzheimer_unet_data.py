@@ -21,13 +21,14 @@ from PIL import Image, UnidentifiedImageError
 
 # Mindset mapping
 label_map_idx = {
-    'mtl_atrophy': 0,              # Mild_Demented
-    'mtl_atrophy,other_atrophy': 1,# Moderate_Demented
-    'mtl_atrophy,wmh': 3,          # Very_Mild_Demented
-    'normal': 2,                   # Non_Demented
-    'other_atrophy': 0,            # Mild_Demented
-    'wmh': 3,                      # Very_Mild_Demented
-    'wmh,other_atrophy': 1         # Moderate_Demented
+    'mtl_atrophy': 0,              # Mild_Demented MTL
+    'mtl_atrophy,other_atrophy': 1,# Moderate_Demented MTL
+    'mtl_atrophy,wmh': 3,          # Very_Mild_Demented MTL
+    'normal': 2,                   # Non_Demented N (nhãn 0) 4 màu hoàn toàn khác nhau 
+    'other_atrophy': 0,            # Mild_Demented O
+    'wmh': 3,                      # Very_Mild_Demented WMH
+    'wmh,other_atrophy': 1         # Moderate_Demented WMH 
+    # alzemer | normal | other 
 }
 
 
