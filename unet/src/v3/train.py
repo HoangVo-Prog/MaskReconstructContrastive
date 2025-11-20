@@ -311,6 +311,33 @@ def masked_l1_loss(pred: torch.Tensor, target: torch.Tensor, pixel_mask: torch.T
     denom = pixel_mask.sum().clamp(min=1.0)
     return diff.sum() / denom
 
+def mixed_l1_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    pixel_mask: torch.Tensor,
+    alpha_mask: float = 1.0,
+    beta_unmask: float = 0.2
+) -> torch.Tensor:
+    """
+    alpha_mask: trọng số cho vùng masked
+    beta_unmask: trọng số cho vùng unmasked
+    """
+    diff = torch.abs(pred - target)
+
+    m = pixel_mask
+    um = 1.0 - m
+
+    # L1 trung bình trên vùng masked
+    masked_denom = m.sum().clamp(min=1.0)
+    masked_l1 = (diff * m).sum() / masked_denom
+
+    # L1 trung bình trên vùng unmasked
+    unmasked_denom = um.sum().clamp(min=1.0)
+    unmasked_l1 = (diff * um).sum() / unmasked_denom
+
+    # Kết hợp
+    return alpha_mask * masked_l1 + beta_unmask * unmasked_l1
+
 
 def nt_xent_loss(z1: torch.Tensor, z2: torch.Tensor, temperature: float = 0.2) -> torch.Tensor:
     B, _ = z1.size()
@@ -411,7 +438,10 @@ def train(args):
                 pixel_mask = sample_masks_anti_mirror(x.size(0), spec, device)
 
                 recon, _ = model.forward(x, pixel_mask=pixel_mask)
-                loss_recon = masked_l1_loss(recon, x, pixel_mask)
+                if args.enable_masked_loss:
+                    loss_recon = masked_l1_loss(recon, x, pixel_mask)
+                else:
+                    loss_recon = mixed_l1_loss(recon, x, pixel_mask)
                 
             with torch.amp.autocast("cuda", enabled=False):
                 ssim_sum = ssim_index(x.float(), recon.float()).sum()
@@ -524,11 +554,26 @@ def train(args):
             vrecon, _ = model.forward(vx, pixel_mask=vmask)
             vresid = torch.abs(vx - vrecon).clamp(0, 1)
             vmasked = vx * (1.0 - vmask)
-
+            
             out_path = str(vis_dir / f'epoch_{epoch:03d}.png')
-            save_image_grid([vx, vmask, vmasked, vrecon.clamp(0,1), vresid],
-                            ['val: target', 'mask', 'masked', 'recon', 'residual'],
-                            out_path)
+
+            if args.enable_masked_loss:
+                recon_full = vmask * vrecon + (1.0 - vmask) * vx
+                vresid = torch.abs(vx - recon_full).clamp(0, 1)
+                save_image_grid(
+                    [vx, vmask, vmasked, recon_full.clamp(0,1), vresid],
+                    ['val: target', 'mask', 'masked', 'recon_full', 'residual'],
+                    out_path
+                )
+            else:
+                vresid = torch.abs(vx - vrecon).clamp(0, 1)
+                vmasked = vx * (1.0 - vmask)
+
+                save_image_grid(
+                    [vx, vmask, vmasked, vrecon.clamp(0,1), vresid],
+                    ['val: target', 'mask', 'masked', 'recon', 'residual'],
+                    out_path
+                )
 
         # Save checkpoint
         ckpt = {
@@ -632,6 +677,7 @@ def build_argparser():
 
     # Training
     p.add_argument("--enable-contrastive", action="store_true", help="whether to enable contrastive loss")
+    p.add_argument("--enable-masked-loss", action="store_true", help="whether to use masked loss on unmasked regions")
     p.add_argument("--epochs", type=int, default=100)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-4)
