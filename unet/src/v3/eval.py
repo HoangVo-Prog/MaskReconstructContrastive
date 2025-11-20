@@ -299,7 +299,9 @@ def main():
 
     if args.tsne:
         tsne_prefix = os.path.join(args.out_dir, f"tsne_{args.split}")
-        run_tsne_variants(model, loader, device, tsne_prefix, max_items=args.tsne_max_items)
+        run_tsne_variants(model, loader, device, tsne_prefix, max_items=args.tsne_max_items, label="label_1")
+        run_tsne_variants(model, loader, device, tsne_prefix, max_items=args.tsne_max_items, label="label_2")
+
         print(f"Saved t SNE to {tsne_prefix}_enc_*.png")
 
 
