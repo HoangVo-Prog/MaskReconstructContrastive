@@ -436,8 +436,8 @@ def train(args):
 
             with torch.amp.autocast("cuda", enabled=(device.type == "cuda" and args.amp)):
                 pixel_mask = sample_masks_anti_mirror(x.size(0), spec, device)
-
-                recon, _ = model.forward(x, pixel_mask=pixel_mask)
+                x_masked = x * (1.0 - pixel_mask)
+                recon, _ = model.forward(x_masked, pixel_mask=pixel_mask)
                 if args.enable_masked_loss:
                     loss_recon = masked_l1_loss(recon, x, pixel_mask)
                 else:
@@ -506,7 +506,8 @@ def train(args):
                 vx = vb['input'].to(device, non_blocking=True)
                 vx = preprocess_batch(vx, args)
                 vmask = sample_masks_anti_mirror(vx.size(0), spec, device)
-                vrecon, _ = model.forward(vx, pixel_mask=vmask)
+                vx_masked = vx * (1.0 - vmask)
+                vrecon, _ = model.forward(vx_masked, pixel_mask=vmask)
 
                 vdiff = torch.abs(vrecon - vx)
                 vm = vmask
@@ -690,8 +691,8 @@ def build_argparser():
     p.add_argument("--ckpt-dir", type=str, default="", help="optional checkpoints dir; default under run dir")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--amp", action="store_true")
-    p.add_argument("--vis-every", type=int, default=5)
-    p.add_argument("--tsne-every", type=int, default=5)
+    p.add_argument("--vis-every", type=int, default=20)
+    p.add_argument("--tsne-every", type=int, default=20)
     p.add_argument("--tsne-max-items", type=int, default=1000)
 
     # Preprocessing flags
