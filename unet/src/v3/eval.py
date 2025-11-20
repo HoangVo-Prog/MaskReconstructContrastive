@@ -201,7 +201,7 @@ def evaluate_recon(model: SmallUNetSSL, loader: DataLoader, device: torch.device
 
 
 @torch.no_grad()
-def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.device, out_prefix: str, max_items: int = 1000, label="label"):
+def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.device, out_prefix: str, max_items: int = 1000, label_val="label"):
     model.eval()
 
     modes = ["s4", "bottleneck"]
@@ -215,7 +215,7 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
             x = batch["input"].to(device, non_blocking=True)
             _, h = model.encoder_embed(x, mode=mode)
             embs.append(F.normalize(h, dim=-1).cpu().numpy())
-            labels.append(batch.get(label, torch.zeros(x.size(0), dtype=torch.long, device=device)).cpu().numpy())
+            labels.append(batch.get(label_val, torch.zeros(x.size(0), dtype=torch.long, device=device)).cpu().numpy())
             count += x.size(0)
             if count >= max_items:
                 break
@@ -234,14 +234,14 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
         uniq = sorted(set(list(y)))
         for lbl in uniq:
             key = str(int(lbl)) if str(lbl).isdigit() else str(lbl)
-            if label == "label_1":
+            if label_val == "label_1":
                 name_id = mindset_idx_map_label_1.get(key, key)
                 print(name_id)
                 name = mindset_label_map_idx_1.get(name_id, name_id)
                 print(name)
                 color = mindset_colors_1.get(name, "#888888")
                 print(color)
-            elif label == "label_2":
+            elif label_val == "label_2":
                 name_id = mindset_idx_map_label_2.get(key, key)
                 name = mindset_label_map_idx_2.get(name_id, name_id)
                 color = mindset_colors_2.get(name, "#888888")

@@ -20,6 +20,9 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image, UnidentifiedImageError
 
+import pprint
+
+
 # Mindset mapping and fixed colors for t SNE legends
 
 mindset_idx_map_label_1 = {
@@ -671,6 +674,8 @@ def create_unet_dataloader_from_folder_csv(
         pin_memory=pin_memory,
         drop_last=False,
     )
+    
+    pprint.pprint(loader.__dict__)
     return loader
 
 
