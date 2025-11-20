@@ -20,8 +20,6 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image, UnidentifiedImageError
 
-import pprint
-
 
 # Mindset mapping and fixed colors for t SNE legends
 
@@ -503,14 +501,15 @@ class FolderUNetDataset(Dataset):
     """
     Loads images using a CSV with columns:
       - 'img_path': relative or absolute path to image file
-      - 'abnormal_type': mapped to label via `mindset_label_map_idx_1`
+      - 'abnormal_type': mapped to labels via `mindset_label_map_idx_1` and `mindset_label_map_idx_2`
 
     Returns:
       {
         "input":    tensor [1,H,W] (optionally unsharp),
         "target":   same as input,
         "original": tensor [1,H,W] before unsharp,
-        "label":    int64 tensor,
+        "label_1":  int64 tensor (e.g. detailed class),
+        "label_2":  int64 tensor (e.g. Normal vs Alzheimer vs Other),
         "path":     str
       }
     """
@@ -542,25 +541,25 @@ class FolderUNetDataset(Dataset):
         df["img_path"] = df["img_path"].astype(str).str.strip()
         df["abnormal_type"] = df["abnormal_type"].astype(str).str.strip().str.lower()
 
-        # Map abnormal_type -> label
+        # Map abnormal_type -> label_1, label_2
         def map_label_1(key: str) -> Optional[int]:
             return mindset_label_map_idx_1.get(key, None)
-        
+
         def map_label_2(key: str) -> Optional[int]:
             return mindset_label_map_idx_2.get(key, None)
-        
+
         df["label_1"] = df["abnormal_type"].map(map_label_1)
         df["label_2"] = df["abnormal_type"].map(map_label_2)
 
-        # Report and drop rows with unknown mapping
-        unknown_1 = df[df["label_1"].isna()]
-        unknown_2 = df[df["label_2"].isna()]
-
-        if len(unknown_1) > 0 or len(unknown_2) > 0:
-            print(f"[FolderUNetDataset] Warning: {len(unknown_1)} rows have unknown abnormal_type "
-                  f"and will be skipped. Examples: {unknown_1['abnormal_type'].unique()[:10]}")
-            df = df.dropna(subset=["label_1"])
-            df = df.dropna(subset=["label_2"])
+        # Report and drop rows with unknown mapping in either label_1 or label_2
+        unknown = df[df["label_1"].isna() | df["label_2"].isna()]
+        if len(unknown) > 0:
+            print(
+                f"[FolderUNetDataset] Warning: {len(unknown)} rows have unknown abnormal_type "
+                f"for label_1 or label_2 and will be skipped. "
+                f"Examples: {unknown['abnormal_type'].unique()[:10]}"
+            )
+            df = df.dropna(subset=["label_1", "label_2"])
 
         # Build absolute paths
         def make_full_path(p: str) -> Path:
@@ -570,32 +569,43 @@ class FolderUNetDataset(Dataset):
 
         df["full_path"] = df["img_path"].apply(make_full_path)
 
-        # Optional pre-validation: existence + PIL-openable
-        samples: List[Tuple[Path, int]] = []
+        # Optional pre validation: existence + PIL openable
+        samples: List[Tuple[Path, int, int]] = []
         bad_count = 0
         for _, row in df.iterrows():
             path: Path = row["full_path"]
-            label = int(row["label"])
+            label_1 = int(row["label_1"])
+            label_2 = int(row["label_2"])
+
             if not path.exists():
                 if bad_count < warn_limit:
                     print(f"[FolderUNetDataset] Missing file: {path}")
                 bad_count += 1
                 continue
+
             if validate_images:
                 try:
                     with Image.open(path) as im:
                         im.verify()  # quick header check
                 except Exception as e:
                     if bad_count < warn_limit:
-                        print(f"[FolderUNetDataset] Unreadable image skipped: {path} ({type(e).__name__})")
+                        print(
+                            f"[FolderUNetDataset] Unreadable image skipped: "
+                            f"{path} ({type(e).__name__})"
+                        )
                     bad_count += 1
                     continue
-            samples.append((path, label))
+
+            samples.append((path, label_1, label_2))
 
         if bad_count > warn_limit:
-            print(f"[FolderUNetDataset] ...and {bad_count - warn_limit} more invalid/missing files skipped.")
+            print(
+                f"[FolderUNetDataset] ...and {bad_count - warn_limit} more invalid or missing files skipped."
+            )
         if len(samples) == 0:
-            raise RuntimeError("No valid images after CSV mapping and validation.")
+            raise RuntimeError(
+                "No valid images after CSV mapping and validation."
+            )
 
         self.samples = samples
 
@@ -611,7 +621,7 @@ class FolderUNetDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        path, label = self.samples[idx]
+        path, label_1, label_2 = self.samples[idx]
         try:
             with Image.open(path) as img:
                 pil_img = img.convert("RGB")
@@ -626,7 +636,8 @@ class FolderUNetDataset(Dataset):
             "input": x_proc,
             "target": x_proc,
             "original": x_orig,
-            "label": torch.tensor(label, dtype=torch.long),
+            "label_1": torch.tensor(label_1, dtype=torch.long),
+            "label_2": torch.tensor(label_2, dtype=torch.long),
             "path": str(path),
         }
 
@@ -674,8 +685,7 @@ def create_unet_dataloader_from_folder_csv(
         pin_memory=pin_memory,
         drop_last=False,
     )
-    
-    pprint.pprint(loader.__dict__)
+
     return loader
 
 
