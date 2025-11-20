@@ -23,10 +23,10 @@ from PIL import Image, UnidentifiedImageError
 # Mindset mapping and fixed colors for t SNE legends
 
 mindset_idx_map_label_1 = {
-    0: "Normal",
-    1: "MTL",
-    2: "Other",
-    3: "WMH",
+    '0': "Normal",
+    '1': "MTL",
+    '2': "Other",
+    '3': "WMH",
 }
 
 mindset_label_map_idx_1 = {
@@ -59,9 +59,9 @@ mindset_label_map_idx_2 = {
 }
 
 mindset_idx_map_label_2 = {
-    0: "Normal",
-    1: "Alzheimer",
-    2: "Other",
+    '0': "Normal",
+    '1': "Alzheimer",
+    '2': "Other",
 }
 
 mindset_colors_2 = {
