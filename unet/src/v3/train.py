@@ -363,6 +363,9 @@ def train(args):
         num_workers=args.num_workers,
         apply_unsharp=True,
         pin_memory=True,
+        data_source="adni" if args.adni else "hf",
+        adni_path=args.adni_path,
+        adni_image_type=args.image_type
     )
 
     model = SmallUNetSSL(
@@ -563,7 +566,7 @@ def train(args):
             )  
             
         # t SNE snapshots
-        if epoch % args.tsne_every == 0:
+        if epoch % args.tsne_every == 0 and not args.adni:
             tsne_prefix = str(tsne_dir / f"tsne_epoch{epoch:03d}")
             run_tsne_variants(model, val_loader, device, tsne_prefix, max_items=args.tsne_max_items)
 
@@ -614,8 +617,9 @@ def build_argparser():
     
     # data source
     p.add_argument("--adni", default=False, help="whether to use ADNI dataset")
-    p.add_argument("--hf", default=True, help="whether to use Huggingface dataset")
-    
+    p.add_argument("--adni-path", type=str, default="", help="path to ADNI data root if using ADNI")
+    p.add_argument("--image-type", type=str, default="axial", choices=["axial", "coronal"], help="which slice orientation to use from 3D MRI")
+     
     # Size and data
     p.add_argument("--image-size", type=int, default=192)
     p.add_argument("--patch-size", type=int, default=16)

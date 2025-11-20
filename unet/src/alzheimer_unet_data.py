@@ -8,6 +8,7 @@ from torchvision import transforms
 from sklearn.model_selection import train_test_split
 import numpy as np
 import pandas as pd
+import nibabel as nib
 
 import os
 from pathlib import Path
@@ -134,6 +135,192 @@ class AlzheimerUNetDataset(Dataset):
         return sample
 
 
+class AdniNiftiSliceDataset(Dataset):
+    """
+    Expands a folder of .nii or .nii.gz into 2D central slices.
+
+    Each item:
+      input    [1,H,W] optionally unsharp
+      target   [1,H,W] same as input
+      original [1,H,W] before unsharp
+      label    int64  (from CSV if provided, else -1)
+      path     str    original nii path
+      slice_idx int   slice index in the chosen axis
+    """
+
+    ORIENT_TO_AXIS = {"axial": 2, "coronal": 1, "sagittal": 0}
+
+    def __init__(
+        self,
+        root_dir: str,
+        image_size: int = 128,
+        apply_unsharp: bool = True,
+        adni_image_type: str = "axial",         # orientation for slicing
+        adni_series_filter: Optional[List[str]] = None,  # substrings to keep in filenames
+        adni_label_csv: Optional[str] = None,   # optional mapping CSV with columns filename,label
+        middle_frac: float = 0.4,               # keep central fraction of slices
+        middle_subsample: int = 1,              # subsample stride within middle segment
+        validate_read: bool = True,
+        warn_limit: int = 20,
+    ):
+        self.root_dir = Path(root_dir)
+        if not self.root_dir.exists():
+            raise FileNotFoundError(f"ADNI root not found: {self.root_dir}")
+
+        adni_image_type = str(adni_image_type).lower().strip()
+        if adni_image_type not in self.ORIENT_TO_AXIS:
+            raise ValueError(f"adni_image_type must be one of {list(self.ORIENT_TO_AXIS.keys())}")
+        self.axis = self.ORIENT_TO_AXIS[adni_image_type]
+
+        self.image_size = image_size
+        self.apply_unsharp = apply_unsharp
+        self.middle_frac = float(middle_frac)
+        self.middle_subsample = max(1, int(middle_subsample))
+
+        # Load optional labels
+        self.label_map = {}
+        if adni_label_csv is not None:
+            df_lab = pd.read_csv(adni_label_csv)
+            if "filename" not in df_lab.columns or "label" not in df_lab.columns:
+                raise ValueError("adni_label_csv must contain columns 'filename' and 'label'")
+            # Normalize key to base filename without compression extension
+            def keyize(fn: str) -> str:
+                base = os.path.basename(fn)
+                # strip .nii or .nii.gz
+                if base.endswith(".nii.gz"):
+                    base = base[:-7]
+                elif base.endswith(".nii"):
+                    base = base[:-4]
+                return base
+            for _, r in df_lab.iterrows():
+                self.label_map[keyize(str(r["filename"]))] = int(r["label"])
+
+        # Discover nii files
+        nii_paths = []
+        for p in self.root_dir.rglob("*"):
+            name = p.name.lower()
+            if name.endswith(".nii") or name.endswith(".nii.gz"):
+                nii_paths.append(p)
+
+        # Optional series substring filter on filenames
+        if adni_series_filter:
+            filt_lower = [s.lower() for s in adni_series_filter]
+            def keep(path: Path) -> bool:
+                nm = path.name.lower()
+                return any(s in nm for s in filt_lower)
+            nii_paths = [p for p in nii_paths if keep(p)]
+
+        if len(nii_paths) == 0:
+            raise RuntimeError(f"No .nii or .nii.gz found under {self.root_dir}")
+
+        # Index into slices lazily, but precompute slice indices per file
+        self.index: List[Tuple[Path, int]] = []  # (nii_path, slice_idx)
+        bad = 0
+        for p in nii_paths:
+            try:
+                img = nib.load(str(p))
+                shape = img.shape
+                if len(shape) < 3:
+                    # skip non 3D
+                    continue
+                depth = shape[self.axis]
+                if depth < 8:
+                    # too shallow to find meaningful middle
+                    continue
+                # central band
+                band = int(round(self.middle_frac * depth))
+                band = max(1, min(depth, band))
+                start = (depth - band) // 2
+                stop = start + band
+                slice_indices = list(range(start, stop, self.middle_subsample))
+                for s in slice_indices:
+                    self.index.append((p, s))
+            except Exception:
+                if bad < warn_limit:
+                    print(f"[AdniNiftiSliceDataset] Skipped unreadable: {p}")
+                bad += 1
+                continue
+        if bad > warn_limit:
+            print(f"[AdniNiftiSliceDataset] ...and {bad - warn_limit} more unreadable NIfTI skipped.")
+
+        if len(self.index) == 0:
+            raise RuntimeError("No valid middle slices discovered from ADNI volumes.")
+
+        # Transforms
+        self.to_tensor_resize = transforms.Compose([
+            transforms.ToTensor(),                          # HWC [0,1] -> CHW
+            transforms.Resize((image_size, image_size), antialias=True),
+        ])
+        self.unsharp = UnsharpMask(kernel_size=5, sigma=1.0, amount=0.7) if apply_unsharp else None
+
+        # Small LRU cache for last loaded volume to avoid reloading for consecutive slices
+        self._cache_path: Optional[Path] = None
+        self._cache_data: Optional[np.ndarray] = None      # float32 volume in [0,1] after percentile norm
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def _load_volume_norm01(self, path: Path) -> np.ndarray:
+        # Cache the most recent volume
+        if self._cache_path == path and self._cache_data is not None:
+            return self._cache_data
+        vol = nib.load(str(path)).get_fdata(dtype=np.float32)
+        # robust percentile scaling per volume
+        lo = np.percentile(vol, 1.0)
+        hi = np.percentile(vol, 99.0)
+        if hi <= lo:
+            hi = lo + 1e-6
+        vol = np.clip((vol - lo) / (hi - lo), 0.0, 1.0)
+        self._cache_path = path
+        self._cache_data = vol
+        return vol
+
+    def _extract_slice(self, vol01: np.ndarray, slice_idx: int) -> np.ndarray:
+        # axis order is (X,Y,Z). We slice along self.axis then make HxW
+        if self.axis == 2:      # axial, slice [X,Y]
+            sl = vol01[:, :, slice_idx]
+        elif self.axis == 1:    # coronal, slice [X,Z]
+            sl = vol01[:, slice_idx, :]
+        else:                   # sagittal, slice [Y,Z]
+            sl = vol01[slice_idx, :, :]
+        # normalize per slice again to enhance contrast
+        lo = np.percentile(sl, 1.0)
+        hi = np.percentile(sl, 99.0)
+        if hi <= lo:
+            hi = lo + 1e-6
+        sl = np.clip((sl - lo) / (hi - lo), 0.0, 1.0)
+        return sl
+
+    def __getitem__(self, idx: int):
+        path, sidx = self.index[idx]
+        vol01 = self._load_volume_norm01(path)
+        sl = self._extract_slice(vol01, sidx)  # HxW in [0,1]
+
+        # to tensor through PIL-like path to reuse your transforms shape
+        img_u8 = (sl * 255.0).astype(np.uint8)
+        pil = Image.fromarray(img_u8, mode="L")
+        x_orig = self.to_tensor_resize(pil)  # [1,H,W] in [0,1]
+
+        x_proc = self.unsharp(x_orig) if self.unsharp is not None else x_orig
+
+        # map label if provided
+        base = path.name
+        if base.endswith(".nii.gz"):
+            base = base[:-7]
+        elif base.endswith(".nii"):
+            base = base[:-4]
+        label = self.label_map.get(base, -1)
+
+        return {
+            "input":    x_proc,
+            "target":   x_proc,
+            "original": x_orig,
+            "label":    torch.tensor(label, dtype=torch.long),
+            "path":     str(path),
+            "slice_idx": int(sidx),
+        }
+
+
 def create_unet_dataloaders(
     batch_size: int = 8,
     val_size: float = 0.2,
@@ -141,6 +328,14 @@ def create_unet_dataloaders(
     image_size: int = 128,
     apply_unsharp: bool = True,
     pin_memory: bool = True,
+    data_source: str = "hf",
+    adni_path: Optional[str] = None,
+    adni_image_type: str = "axial",                 # axial, coronal, sagittal
+    adni_series_filter: Optional[List[str]] = None, # e.g., ["MT1","MPRAGE"]
+    adni_label_csv: Optional[str] = None,           # optional filename->label csv
+    adni_middle_frac: float = 0.4,                  # central fraction of slices
+    adni_middle_subsample: int = 1,                 # stride in that band
+    seed: int = 42,
 ):
     """
     Tạo DataLoader cho UNet với dataset Falah/Alzheimer_MRI.
@@ -148,22 +343,88 @@ def create_unet_dataloaders(
     Trả về:
         train_loader, val_loader, test_loader
     """
+    if data_source == "hf":
+        raw_train = load_dataset("Falah/Alzheimer_MRI", split="train")
+        raw_test = load_dataset("Falah/Alzheimer_MRI", split="test")
 
-    raw_train = load_dataset("Falah/Alzheimer_MRI", split="train")
-    raw_test = load_dataset("Falah/Alzheimer_MRI", split="test")
+        indices = np.arange(len(raw_train))
+        labels = np.array(raw_train["label"])
 
-    indices = np.arange(len(raw_train))
-    labels = np.array(raw_train["label"])
+        train_idx, val_idx = train_test_split(
+            indices,
+            test_size=val_size,
+            random_state=42,
+            stratify=labels,
+        )
 
-    train_idx, val_idx = train_test_split(
-        indices,
-        test_size=val_size,
-        random_state=42,
-        stratify=labels,
-    )
+        hf_train = raw_train.select(train_idx)
+        hf_val   = raw_train.select(val_idx)
 
-    hf_train = raw_train.select(train_idx)
-    hf_val = raw_train.select(val_idx)
+        print(f"Train size: {len(hf_train)}")
+        print(f"Val size:   {len(hf_val)}")
+        print(f"Test size:  {len(raw_test)}")
+
+        train_ds = AlzheimerUNetDataset(hf_dataset=hf_train, image_size=image_size, apply_unsharp=apply_unsharp)
+        val_ds   = AlzheimerUNetDataset(hf_dataset=hf_val,   image_size=image_size, apply_unsharp=apply_unsharp)
+        test_ds  = AlzheimerUNetDataset(hf_dataset=raw_test, image_size=image_size, apply_unsharp=apply_unsharp)
+
+        
+    elif data_source == "adni":
+        if adni_path is None:
+            raise ValueError("For data_source='adni', please provide adni_path pointing to .nii files")
+
+        full_ds = AdniNiftiSliceDataset(
+            root_dir=adni_path,
+            image_size=image_size,
+            apply_unsharp=apply_unsharp,
+            adni_image_type=adni_image_type,
+            adni_series_filter=adni_series_filter,
+            adni_label_csv=adni_label_csv,
+            middle_frac=adni_middle_frac,
+            middle_subsample=adni_middle_subsample,
+        )
+        N = len(full_ds)
+        indices = np.arange(N)
+
+        # Stratify only if labels are available and contain 2+ unique values
+        labels = None
+        if adni_label_csv is not None:
+            labels = np.array([full_ds.label_map.get(
+                os.path.basename(path)[:-7] if str(path).endswith(".nii.gz") else os.path.basename(path)[:-4],
+                -1
+            ) for path, _ in full_ds.index])
+            uniq = np.unique(labels)
+            if len(uniq) < 2 or np.any(labels < 0):
+                labels = None  # fallback to random split
+
+        if labels is None:
+            tr_idx, val_idx = train_test_split(indices, test_size=val_size, random_state=seed, shuffle=True)
+        else:
+            tr_idx, val_idx = train_test_split(indices, test_size=val_size, random_state=seed, stratify=labels)
+
+        # A small held out test from val side to match your HF signature
+        # Here we split val 50 50 for val and test unless your ADNI supply a distinct test
+        val_idx, test_idx = train_test_split(val_idx, test_size=0.5, random_state=seed)
+
+        # Subset wrappers
+        class _Subset(Dataset):
+            def __init__(self, base, idxs):
+                self.base = base
+                self.idxs = list(idxs)
+            def __len__(self): return len(self.idxs)
+            def __getitem__(self, i): return self.base[self.idxs[i]]
+
+        train_ds = _Subset(full_ds, tr_idx)
+        val_ds   = _Subset(full_ds, val_idx)
+        test_ds  = _Subset(full_ds, test_idx)
+
+        print(f"ADNI total slices: {N}")
+        print(f"Train size: {len(train_ds)}")
+        print(f"Val size:   {len(val_ds)}")
+        print(f"Test size:  {len(test_ds)}")
+
+    else:
+        raise ValueError("data_source must be 'hf' or 'adni'")
 
     print(f"Train size: {len(hf_train)}")
     print(f"Val size:   {len(hf_val)}")
