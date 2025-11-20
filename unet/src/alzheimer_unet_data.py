@@ -426,26 +426,6 @@ def create_unet_dataloaders(
     else:
         raise ValueError("data_source must be 'hf' or 'adni'")
 
-    print(f"Train size: {len(hf_train)}")
-    print(f"Val size:   {len(hf_val)}")
-    print(f"Test size:  {len(raw_test)}")
-
-    train_ds = AlzheimerUNetDataset(
-        hf_dataset=hf_train,
-        image_size=image_size,
-        apply_unsharp=apply_unsharp,
-    )
-    val_ds = AlzheimerUNetDataset(
-        hf_dataset=hf_val,
-        image_size=image_size,
-        apply_unsharp=apply_unsharp,
-    )
-    test_ds = AlzheimerUNetDataset(
-        hf_dataset=raw_test,
-        image_size=image_size,
-        apply_unsharp=apply_unsharp,
-    )
-
     def make_loader(ds, shuffle: bool, drop_last: bool = False, pin_memory=False):
         return DataLoader(
             ds,
@@ -456,10 +436,9 @@ def create_unet_dataloaders(
             drop_last=drop_last,
         )
 
-    train_loader = make_loader(train_ds, shuffle=True, drop_last=True, pin_memory=pin_memory)
-    val_loader = make_loader(val_ds, shuffle=False, drop_last=False, pin_memory=pin_memory)
-    test_loader = make_loader(test_ds, shuffle=False, drop_last=False, pin_memory=pin_memory)
-
+    train_loader = make_loader(train_ds, shuffle=True,  drop_last=True,  pin_memory=pin_memory)
+    val_loader   = make_loader(val_ds,   shuffle=False, drop_last=False, pin_memory=pin_memory)
+    test_loader  = make_loader(test_ds,  shuffle=False, drop_last=False, pin_memory=pin_memory)
     return train_loader, val_loader, test_loader
 
 
