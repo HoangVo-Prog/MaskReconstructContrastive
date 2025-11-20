@@ -515,7 +515,7 @@ def train(args):
         if args.enable_contrastive:
             print(
                 f"Epoch {epoch:03d} | "
-                f"train con {loss_con} | mean_var {mean_var:.6f} | min_var {min_var:.6f} | "
+                f"train con {loss_con} | mean_var {mean_var:.6f} | min_var {min_var:.6f}"
             )
 
 
