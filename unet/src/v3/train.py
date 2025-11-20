@@ -458,13 +458,7 @@ def train(args):
             scaler.scale(loss).backward()
             scaler.step(opt)
             scaler.update()
-
-            if step % args.vis_every == 0:
-                masked_input = x * (1.0 - pixel_mask)
-                out_path = str(vis_dir / f"train_epoch{epoch:03d}_step{step:05d}.png")
-                save_image_grid([x, pixel_mask, masked_input, recon.clamp(0, 1), torch.abs(x - recon).clamp(0, 1)],
-                                ["orig", "mask", "masked input", "recon", "residual"],
-                                out_path)
+            
         # Validation recon and SSIM
         val_recon = evaluate_recon(model, val_loader, device, spec, args)
 
@@ -522,20 +516,19 @@ def train(args):
                 f"train con {loss_con} | mean_var {mean_var:.6f} | min_var {min_var:.6f}"
             )
 
+        if epoch % args.vis_every != 0:
+            vb = next(iter(val_loader))
+            vx = vb['input'].to(device, non_blocking=True)
+            vx = preprocess_batch(vx, args)
+            vmask = sample_masks_anti_mirror(vx.size(0), spec, device)
+            vrecon, _ = model.forward(vx, pixel_mask=vmask)
+            vresid = torch.abs(vx - vrecon).clamp(0, 1)
+            vmasked = vx * (1.0 - vmask)
 
-        # Per epoch visualization from first val batch
-        vb = next(iter(val_loader))
-        vx = vb['input'].to(device, non_blocking=True)
-        vx = preprocess_batch(vx, args)
-        vmask = sample_masks_anti_mirror(vx.size(0), spec, device)
-        vrecon, _ = model.forward(vx, pixel_mask=vmask)
-        vresid = torch.abs(vx - vrecon).clamp(0, 1)
-        vmasked = vx * (1.0 - vmask)
-
-        out_path = str(vis_dir / f'epoch_{epoch:03d}.png')
-        save_image_grid([vx, vmask, vmasked, vrecon.clamp(0,1), vresid],
-                        ['val: target', 'mask', 'masked', 'recon', 'residual'],
-                        out_path)
+            out_path = str(vis_dir / f'epoch_{epoch:03d}.png')
+            save_image_grid([vx, vmask, vmasked, vrecon.clamp(0,1), vresid],
+                            ['val: target', 'mask', 'masked', 'recon', 'residual'],
+                            out_path)
 
         # Save checkpoint
         ckpt = {
@@ -651,7 +644,7 @@ def build_argparser():
     p.add_argument("--ckpt-dir", type=str, default="", help="optional checkpoints dir; default under run dir")
     p.add_argument("--cpu", action="store_true")
     p.add_argument("--amp", action="store_true")
-    p.add_argument("--vis-every", type=int, default=200)
+    p.add_argument("--vis-every", type=int, default=5)
     p.add_argument("--tsne-every", type=int, default=5)
     p.add_argument("--tsne-max-items", type=int, default=1000)
 
