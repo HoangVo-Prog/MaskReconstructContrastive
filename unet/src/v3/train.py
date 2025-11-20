@@ -546,7 +546,7 @@ def train(args):
                 f"train con {loss_con} | mean_var {mean_var:.6f} | min_var {min_var:.6f}"
             )
 
-        if epoch % args.vis_every != 0:
+        if epoch % args.vis_every == 0:
             vb = next(iter(val_loader))
             vx = vb['input'].to(device, non_blocking=True)
             vx = preprocess_batch(vx, args)
