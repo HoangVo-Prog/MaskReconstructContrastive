@@ -31,7 +31,9 @@ from alzheimer_unet_data import (
     mindset_idx_map_label_1,
     mindset_idx_map_label_2,
     mindset_label_map_idx_1,
-    mindset_label_map_idx_2
+    mindset_label_map_idx_2,
+    hf_idx_map_label,
+    hf_demantia_colors,
 )
 
 
@@ -243,8 +245,9 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
                 name_id = mindset_idx_map_label_2.get(key, key)
                 name = mindset_label_map_idx_2.get(name_id, name_id)
                 color = mindset_colors_2.get(name, "#888888")
-            # name = hf_idx_map_label.get(key, key)
-            # color = hf_demantia_colors.get(name, "#888888")
+            else:
+                name = hf_idx_map_label.get(key, key)
+                color = hf_demantia_colors.get(name, "#888888")
             mask = (y == lbl)
             plt.scatter(X2[mask, 0], X2[mask, 1], s=10, c=color, label=name, alpha=0.9)
         plt.legend(loc="best", fontsize=8, frameon=False)
