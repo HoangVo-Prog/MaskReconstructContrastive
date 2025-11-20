@@ -237,11 +237,8 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
             key = str(int(lbl)) if str(lbl).isdigit() else str(lbl)
             if label_val == "label_1":
                 name_id = mindset_idx_map_label_1.get(key, key)
-                print("name_id:", name_id, "key:", key)
                 name = mindset_label_map_idx_1.get(name_id, name_id)
-                print("name:", name, "key:", key)
                 color = mindset_colors_1.get(name, "#888888")
-                print("color:", color, "name:", name)
             elif label_val == "label_2":
                 name_id = mindset_idx_map_label_2.get(key, key)
                 name = mindset_label_map_idx_2.get(name_id, name_id)
