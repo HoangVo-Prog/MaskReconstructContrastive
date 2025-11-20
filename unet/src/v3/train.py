@@ -390,8 +390,6 @@ def train(args):
 
     for epoch in range(1, args.epochs + 1):
         
-        train_l1_num = 0.0
-        train_l1_den = 0.0
         train_ssim_sum = 0.0
         train_img_count = 0
         
@@ -400,6 +398,8 @@ def train(args):
         train_mask_den = 0.0
         train_unmask_num = 0.0
         train_unmask_den = 0.0
+        train_total_num = 0.0
+        train_total_den = 0.0
 
         
         model.train()
