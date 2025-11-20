@@ -451,9 +451,14 @@ def train(args):
                 zL, _ = model.encoder_embed(left_aug, mode="multiscale" if args.use_multiscale else "bottleneck")
                 zR, _ = model.encoder_embed(right_aug, mode="multiscale" if args.use_multiscale else "bottleneck")
                 loss_con = nt_xent_loss(zL, zR, temperature=args.temperature)
+                with torch.no_grad():
+                    mean_var, min_var = compute_embedding_variance([zL.detach(), zR.detach()])
+
             else:
                 loss_con = torch.tensor(0.0, device=x.device)
-                
+                mean_var = float("nan")
+                min_var = float("nan")
+                            
             loss = args.lambda_recon * loss_recon + args.lambda_contrast * loss_con
 
             opt.zero_grad(set_to_none=True)
@@ -461,9 +466,7 @@ def train(args):
             scaler.step(opt)
             scaler.update()
 
-            with torch.no_grad():
-                mean_var, min_var = compute_embedding_variance([zL.detach(), zR.detach()])
-
+            
             losses_recon.append(loss_recon.item())
             losses_con.append(loss_con.item())
             emb_vars.append(mean_var)
@@ -478,8 +481,10 @@ def train(args):
                                 out_path)
 
             with open(csv_path, "a") as f:
-                f.write(f"{epoch},{step},{loss.item():.6f},{loss_recon.item():.6f},{loss_con.item():.6f},"
-                        f"{mean_var:.6f},{min_var:.6f}")
+                f.write(
+                    f"{epoch},{step},{loss.item():.6f},{loss_recon.item():.6f},{loss_con.item():.6f},"
+                    f"{mean_var:.6f},{min_var:.6f}\n"
+                )
 
         print(f"Epoch {epoch:03d} | train recon {np.mean(losses_recon):.4f} | train con {np.mean(losses_con):.4f} "
               f"| emb var {np.mean(emb_vars):.5f} | lr {opt.param_groups[0]['lr']:.2e} | time {time.time() - t0:.1f}s")
