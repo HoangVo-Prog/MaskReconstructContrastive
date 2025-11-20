@@ -12,6 +12,7 @@ import argparse
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Tuple, List, Optional
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -387,7 +388,7 @@ def train(args):
 
     best_val = float("inf")
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in tqdm(range(1, args.epochs + 1), desc="Training ..."):
         
         train_ssim_sum = 0.0
         train_img_count = 0
