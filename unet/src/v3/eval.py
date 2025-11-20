@@ -26,8 +26,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from alzheimer_unet_data import (
     create_unet_dataloader_from_folder_csv,
-    hf_idx_map_label, 
-    hf_demantia_colors
+    mindset_colors_1,
+    mindset_colors_2,
+    mindset_idx_map_label_1,
+    mindset_idx_map_label_2,
+    mindset_label_map_idx_1,
+    mindset_label_map_idx_2
 )
 
 
@@ -228,8 +232,14 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
         uniq = sorted(set(list(y)))
         for lbl in uniq:
             key = str(int(lbl)) if str(lbl).isdigit() else str(lbl)
-            name = hf_idx_map_label.get(key, key)
-            color = hf_demantia_colors.get(name, "#888888")
+            if label == "label_1":
+                name = mindset_idx_map_label_1.get(key, key)
+                color = mindset_colors_1.get(name, "#888888")
+            elif label == "label_2":
+                name = mindset_idx_map_label_2.get(key, key)
+                color = mindset_colors_2.get(name, "#888888")
+            # name = hf_idx_map_label.get(key, key)
+            # color = hf_demantia_colors.get(name, "#888888")
             mask = (y == lbl)
             plt.scatter(X2[mask, 0], X2[mask, 1], s=10, c=color, label=name, alpha=0.9)
         plt.legend(loc="best", fontsize=8, frameon=False)
