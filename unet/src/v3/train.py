@@ -508,6 +508,7 @@ def train(args):
         print(
             f"Epoch {epoch:03d} | "
             f"train L1 (M/U/T) {train_recon_masked:.4f}/{train_recon_unmasked:.4f}/{train_recon_total:.4f} | "
+            f"train con {loss_con} | mean_var {mean_var:.6f} | min_var {min_var:.6f} | "
             f"val L1 (M/U/T) {val_recon_masked:.4f}/{val_recon_unmasked:.4f}/{val_recon_total:.4f} | "
             f"train SSIM {train_ssim_mean:.4f} | val SSIM {val_ssim_mean:.4f}"
         )
