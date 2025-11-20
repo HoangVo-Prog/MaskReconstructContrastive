@@ -298,11 +298,13 @@ def main():
     print(f"{args.split} recon {recon:.4f}")
 
     if args.tsne:
-        tsne_prefix = os.path.join(args.out_dir, f"tsne_{args.split}")
-        run_tsne_variants(model, loader, device, tsne_prefix, max_items=args.tsne_max_items, label="label_1")
-        run_tsne_variants(model, loader, device, tsne_prefix, max_items=args.tsne_max_items, label="label_2")
+        tsne_prefix_1 = os.path.join(args.out_dir, f"tsne_{args.split}_1")
+        run_tsne_variants(model, loader, device, tsne_prefix_1, max_items=args.tsne_max_items, label="label_1")
+        
+        tsne_prefix_2 = os.path.join(args.out_dir, f"tsne_{args.split}_2")
+        run_tsne_variants(model, loader, device, tsne_prefix_2, max_items=args.tsne_max_items, label="label_2")
 
-        print(f"Saved t SNE to {tsne_prefix}_enc_*.png")
+        print(f"Saved t SNE to {args.out_dir}_enc_*.png")
 
 
 if __name__ == "__main__":
