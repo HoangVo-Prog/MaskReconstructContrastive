@@ -20,16 +20,70 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image, UnidentifiedImageError
 
-# Mindset mapping
-label_map_idx = {
-    'mtl_atrophy': 0,              # Mild_Demented MTL
+# Mindset mapping and fixed colors for t SNE legends
+
+mindset_idx_map_label_1 = {
+    0: "Normal",
+    1: "MTL",
+    2: "Other",
+    3: "WMH",
+}
+
+mindset_label_map_idx_1 = {
+    'mtl_atrophy': 1,              # Mild_Demented MTL
     'mtl_atrophy,other_atrophy': 1,# Moderate_Demented MTL
-    'mtl_atrophy,wmh': 3,          # Very_Mild_Demented MTL
-    'normal': 2,                   # Non_Demented N (nhãn 0) 4 màu hoàn toàn khác nhau 
-    'other_atrophy': 0,            # Mild_Demented O
+    'mtl_atrophy,wmh': 1,          # Very_Mild_Demented MTL
+    'normal': 0,                   # Non_Demented N (nhãn 0) 4 màu hoàn toàn khác nhau 
+    'other_atrophy': 2,            # Mild_Demented O
     'wmh': 3,                      # Very_Mild_Demented WMH
-    'wmh,other_atrophy': 1         # Moderate_Demented WMH 
+    'wmh,other_atrophy': 3         # Moderate_Demented WMH 
     # alzemer | normal | other 
+}
+
+mindset_colors_1 = {
+    "MTL": "#e18775",
+    "Normal": "#fdfdfd",
+    "Other": "#7bbfc8",
+    "WMH": "#fde2b6",
+}
+
+
+mindset_label_map_idx_2 = {
+    'mtl_atrophy': 1,              # Mild_Demented MTL
+    'mtl_atrophy,other_atrophy': 1,# Moderate_Demented MTL
+    'mtl_atrophy,wmh': 1,          # Very_Mild_Demented MTL
+    'normal': 0,                   # Non_Demented N (nhãn 0) 4 màu hoàn toàn khác nhau 
+    'other_atrophy': 2,            # Mild_Demented O
+    'wmh': 1,                      # Very_Mild_Demented WMH
+    'wmh,other_atrophy': 1 
+}
+
+mindset_idx_map_label_2 = {
+    0: "Normal",
+    1: "Alzheimer",
+    2: "Other",
+}
+
+mindset_colors_2 = {
+    "MTL": "#e18775",
+    "Normal": "#fdfdfd",
+    "Other": "#7bbfc8",
+}
+    
+
+# Huggingface mapping and fixed colors for t SNE legends
+hf_idx_map_label = {
+    '0': "Mild_Demented",
+    '1': "Moderate_Demented",
+    '2': "Non_Demented",
+    '3': "Very_Mild_Demented",
+}
+
+hf_demantia_colors = {
+    "Moderate_Demented": "#a5352b",
+    "Non_Demented": "#457eb7",
+    "Mild_Demented": "#e18775",
+    "Very_Mild_Demented": "#ffe9c6",
 }
 
 
@@ -446,7 +500,7 @@ class FolderUNetDataset(Dataset):
     """
     Loads images using a CSV with columns:
       - 'img_path': relative or absolute path to image file
-      - 'abnormal_type': mapped to label via `label_map_idx`
+      - 'abnormal_type': mapped to label via `mindset_label_map_idx_1`
 
     Returns:
       {
@@ -486,16 +540,24 @@ class FolderUNetDataset(Dataset):
         df["abnormal_type"] = df["abnormal_type"].astype(str).str.strip().str.lower()
 
         # Map abnormal_type -> label
-        def map_label(a: str) -> Optional[int]:
-            return label_map_idx.get(a, None)
-        df["label"] = df["abnormal_type"].map(map_label)
+        def map_label_1(key: str) -> Optional[int]:
+            return mindset_label_map_idx_1.get(key, None)
+        
+        def map_label_2(key: str) -> Optional[int]:
+            return mindset_label_map_idx_2.get(key, None)
+        
+        df["label_1"] = df["abnormal_type"].map(map_label_1)
+        df["label_2"] = df["abnormal_type"].map(map_label_2)
 
         # Report and drop rows with unknown mapping
-        unknown = df[df["label"].isna()]
-        if len(unknown) > 0:
-            print(f"[FolderUNetDataset] Warning: {len(unknown)} rows have unknown abnormal_type "
-                  f"and will be skipped. Examples: {unknown['abnormal_type'].unique()[:10]}")
-            df = df.dropna(subset=["label"])
+        unknown_1 = df[df["label_1"].isna()]
+        unknown_2 = df[df["label_2"].isna()]
+
+        if len(unknown_1) > 0 or len(unknown_2) > 0:
+            print(f"[FolderUNetDataset] Warning: {len(unknown_1)} rows have unknown abnormal_type "
+                  f"and will be skipped. Examples: {unknown_1['abnormal_type'].unique()[:10]}")
+            df = df.dropna(subset=["label_1"])
+            df = df.dropna(subset=["label_2"])
 
         # Build absolute paths
         def make_full_path(p: str) -> Path:

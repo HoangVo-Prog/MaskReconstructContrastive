@@ -23,22 +23,13 @@ from model import SmallUNetSSL
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from alzheimer_unet_data import create_unet_dataloaders, create_unet_dataloader_from_folder_csv
 
-# Huggingface mapping and fixed colors for t SNE legends
-idx_map_label = {
-    '0': "Mild_Demented",
-    '1': "Moderate_Demented",
-    '2': "Non_Demented",
-    '3': "Very_Mild_Demented",
-}
+from alzheimer_unet_data import (
+    create_unet_dataloader_from_folder_csv,
+    hf_idx_map_label, 
+    hf_demantia_colors
+)
 
-dementia_colors = {
-    "Moderate_Demented": "#a5352b",
-    "Non_Demented": "#457eb7",
-    "Mild_Demented": "#e18775",
-    "Very_Mild_Demented": "#ffe9c6",
-}
 
 
 # Minimal preprocessing and masking so eval can run standalone
@@ -204,7 +195,7 @@ def evaluate_recon(model: SmallUNetSSL, loader: DataLoader, device: torch.device
 
 
 @torch.no_grad()
-def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.device, out_prefix: str, max_items: int = 1000):
+def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.device, out_prefix: str, max_items: int = 1000, label="label"):
     model.eval()
 
     modes = ["s4", "bottleneck"]
@@ -218,7 +209,7 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
             x = batch["input"].to(device, non_blocking=True)
             _, h = model.encoder_embed(x, mode=mode)
             embs.append(F.normalize(h, dim=-1).cpu().numpy())
-            labels.append(batch.get("label", torch.zeros(x.size(0), dtype=torch.long, device=device)).cpu().numpy())
+            labels.append(batch.get(label, torch.zeros(x.size(0), dtype=torch.long, device=device)).cpu().numpy())
             count += x.size(0)
             if count >= max_items:
                 break
@@ -237,8 +228,8 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
         uniq = sorted(set(list(y)))
         for lbl in uniq:
             key = str(int(lbl)) if str(lbl).isdigit() else str(lbl)
-            name = idx_map_label.get(key, key)
-            color = dementia_colors.get(name, "#888888")
+            name = hf_idx_map_label.get(key, key)
+            color = hf_demantia_colors.get(name, "#888888")
             mask = (y == lbl)
             plt.scatter(X2[mask, 0], X2[mask, 1], s=10, c=color, label=name, alpha=0.9)
         plt.legend(loc="best", fontsize=8, frameon=False)
