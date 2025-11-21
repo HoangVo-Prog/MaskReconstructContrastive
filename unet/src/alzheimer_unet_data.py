@@ -350,6 +350,14 @@ class AdniNiftiSliceDataset(Dataset):
         path, sidx = self.index[idx]
         vol01 = self._load_volume_norm01(path)
         sl = self._extract_slice(vol01, sidx)  # HxW in [0,1]
+        
+        # auto orient to vertical
+        sl = self.ensure_vertical_orientation(sl)
+
+        # to tensor via PIL path to reuse your resize
+        img_u8 = (sl * 255.0).astype(np.uint8)
+        pil = Image.fromarray(img_u8, mode="L")
+        x_orig = self.to_tensor_resize(pil)  # [1,H,W] in [0,1]
 
         # to tensor through PIL-like path to reuse your transforms shape
         img_u8 = (sl * 255.0).astype(np.uint8)
@@ -375,6 +383,87 @@ class AdniNiftiSliceDataset(Dataset):
             "slice_idx": int(sidx),
         }
 
+    def _masked_percentile(self, img: np.ndarray, q: float) -> float:
+        flat = img.reshape(-1)
+        return float(np.percentile(flat, q))
+
+    def _brain_mask_otsu(self, img01: np.ndarray) -> np.ndarray:
+        # very light mask to suppress background in symmetry scores
+        lo = self._masked_percentile(img01, 1.0)
+        hi = self._masked_percentile(img01, 99.0)
+        if hi <= lo:
+            hi = lo + 1e-6
+        x = np.clip((img01 - lo) / (hi - lo), 0.0, 1.0)
+        thr = 0.0 + 0.2  # cheap threshold after robust scaling
+        m = (x > thr).astype(np.float32)
+        # quick blur then threshold to close holes
+        import cv2
+        m = cv2.GaussianBlur(m, (7, 7), 0)
+        m = (m > 0.2).astype(np.float32)
+        return m
+
+    def _vertical_sym_mse(self, img01: np.ndarray, mask: np.ndarray) -> float:
+        H, W = img01.shape
+        w2 = W // 2
+        left  = img01[:, :w2]
+        right = img01[:, W - w2:]
+        mL = mask[:, :w2]
+        mR = mask[:, W - w2:]
+        right_flipped = np.fliplr(right)
+        mR_flip = np.fliplr(mR)
+        m = (mL * mR_flip)
+        denom = m.sum()
+        if denom < 1.0:
+            denom = left.size
+            m = np.ones_like(left, dtype=np.float32)
+        return float(((left - right_flipped) ** 2 * m).sum() / denom)
+
+    def _horizontal_sym_mse(self, img01: np.ndarray, mask: np.ndarray) -> float:
+        H, W = img01.shape
+        h2 = H // 2
+        top    = img01[:h2, :]
+        bottom = img01[H - h2:, :]
+        mT = mask[:h2, :]
+        mB = mask[H - h2:, :]
+        bottom_flipped = np.flipud(bottom)
+        mB_flip = np.flipud(mB)
+        m = (mT * mB_flip)
+        denom = m.sum()
+        if denom < 1.0:
+            denom = top.size
+            m = np.ones_like(top, dtype=np.float32)
+        return float(((top - bottom_flipped) ** 2 * m).sum() / denom)
+
+    def ensure_vertical_orientation(self, sl01: np.ndarray) -> np.ndarray:
+        """
+        Input: 2D numpy array in [0,1]
+        Output: rotated 2D array so that left–right midline is vertical.
+        Chooses rotation k in {0, 90, 270} that minimizes vertical symmetry MSE.
+        """
+        assert sl01.ndim == 2, "expected 2D slice"
+        # light brain mask to reduce background influence
+        m = self._brain_mask_otsu(sl01)
+
+        def vscore(x):
+            return self._vertical_sym_mse(x, m)
+
+        cands = [
+            (vscore(sl01), 0),
+            (vscore(np.rot90(sl01, 1)), 1),
+            (vscore(np.rot90(sl01, 3)), 3),
+        ]
+        _, k = min(cands, key=lambda t: t[0])
+        if k == 0:
+            return sl01
+        return np.rot90(sl01, k)
+
+    def ensure_vertical_pil(self, pil_img):
+        """Convenience wrapper for PIL grayscale images."""
+        import numpy as np
+        arr = np.array(pil_img.convert("L"), dtype=np.float32) / 255.0
+        arr_v = self.ensure_vertical_orientation(arr)
+        from PIL import Image
+        return Image.fromarray((arr_v * 255.0).astype(np.uint8), mode="L")
 
 def create_unet_dataloaders(
     batch_size: int = 8,
