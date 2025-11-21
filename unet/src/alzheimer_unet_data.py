@@ -405,57 +405,68 @@ class AdniNiftiSliceDataset(Dataset):
     def _vertical_sym_mse(self, img01: np.ndarray, mask: np.ndarray) -> float:
         H, W = img01.shape
         w2 = W // 2
+        if w2 == 0:
+            return 0.0
+        # equal-width halves: left w2 cols, right last w2 cols
         left  = img01[:, :w2]
-        right = img01[:, W - w2:]
+        right = img01[:, -w2:]
         mL = mask[:, :w2]
-        mR = mask[:, W - w2:]
+        mR = mask[:, -w2:]
+
         right_flipped = np.fliplr(right)
         mR_flip = np.fliplr(mR)
+
         m = (mL * mR_flip)
         denom = m.sum()
         if denom < 1.0:
             denom = left.size
             m = np.ones_like(left, dtype=np.float32)
+
         return float(((left - right_flipped) ** 2 * m).sum() / denom)
+
 
     def _horizontal_sym_mse(self, img01: np.ndarray, mask: np.ndarray) -> float:
         H, W = img01.shape
         h2 = H // 2
+        if h2 == 0:
+            return 0.0
+        # equal-height halves: top h2 rows, bottom last h2 rows
         top    = img01[:h2, :]
-        bottom = img01[H - h2:, :]
+        bottom = img01[-h2:, :]
         mT = mask[:h2, :]
-        mB = mask[H - h2:, :]
+        mB = mask[-h2:, :]
+
         bottom_flipped = np.flipud(bottom)
         mB_flip = np.flipud(mB)
+
         m = (mT * mB_flip)
         denom = m.sum()
         if denom < 1.0:
             denom = top.size
             m = np.ones_like(top, dtype=np.float32)
-        return float(((top - bottom_flipped) ** 2 * m).sum() / denom)
 
+        return float(((top - bottom_flipped) ** 2 * m).sum() / denom)
+    
     def ensure_vertical_orientation(self, sl01: np.ndarray) -> np.ndarray:
         """
         Input: 2D numpy array in [0,1]
-        Output: rotated 2D array so that left–right midline is vertical.
-        Chooses rotation k in {0, 90, 270} that minimizes vertical symmetry MSE.
+        Output: rotated so the midline is vertical.
+        We evaluate rotations {0, 90, 270}, and for each candidate we
+        recompute the brain mask to keep mask and image aligned.
         """
         assert sl01.ndim == 2, "expected 2D slice"
-        # light brain mask to reduce background influence
-        m = self._brain_mask_otsu(sl01)
 
         def vscore(x):
+            m = self._brain_mask_otsu(x)     # <-- recompute per candidate
             return self._vertical_sym_mse(x, m)
 
-        cands = [
+        candidates = [
             (vscore(sl01), 0),
             (vscore(np.rot90(sl01, 1)), 1),
             (vscore(np.rot90(sl01, 3)), 3),
         ]
-        _, k = min(cands, key=lambda t: t[0])
-        if k == 0:
-            return sl01
-        return np.rot90(sl01, k)
+        _, k = min(candidates, key=lambda t: t[0])
+        return sl01 if k == 0 else np.rot90(sl01, k)
 
     def ensure_vertical_pil(self, pil_img):
         """Convenience wrapper for PIL grayscale images."""
