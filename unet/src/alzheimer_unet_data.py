@@ -66,7 +66,7 @@ mindset_idx_map_label_2 = {
 }
 
 mindset_colors_2 = {
-    "MTL": "df4122",
+    "MTL": "#df4122",
     "Normal": "#f6d097",
     "Other": "#7bbfc8",
 }
