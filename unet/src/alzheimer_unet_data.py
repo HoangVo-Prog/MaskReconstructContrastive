@@ -42,10 +42,10 @@ mindset_label_map_idx_1 = {
 }
 
 mindset_colors_1 = {
-    "MTL": "#e18775",
-    "Normal": "#fdfdfd",
+    "MTL": "#df4122",
+    "Normal": "#f6d097",
     "Other": "#7bbfc8",
-    "WMH": "#fde2b6",
+    "WMH": "#f19809",
 }
 
 
@@ -66,8 +66,8 @@ mindset_idx_map_label_2 = {
 }
 
 mindset_colors_2 = {
-    "MTL": "#e18775",
-    "Normal": "#fdfdfd",
+    "MTL": "df4122",
+    "Normal": "#f6d097",
     "Other": "#7bbfc8",
 }
     
