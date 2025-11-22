@@ -232,7 +232,6 @@ def run_tsne_variants(model: SmallUNetSSL, loader: DataLoader, device: torch.dev
 
         plt.figure(figsize=(6, 6))
         uniq = sorted(set(list(y)))
-        print(uniq)
         for lbl in uniq:
             key = str(int(lbl)) if str(lbl).isdigit() else str(lbl)
             if label_val == "label_1":
