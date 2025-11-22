@@ -61,7 +61,7 @@ mindset_label_map_idx_2 = {
 
 mindset_idx_map_label_2 = {
     '0': "Normal",
-    '1': "Alzheimer",
+    '1': "MTL",
     '2': "Other",
 }
 
